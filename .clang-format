@@ -1,40 +1,7 @@
-# 基础语言与风格
-Language: Cpp
-BasedOnStyle: LLVM
-IndentWidth: 4               # 强制缩进为4个空格
-TabWidth: 4
-UseTab: Never                # 禁用Tab，只用空格
-ColumnLimit: 200             # 放宽行宽，避免强制换行
-
-# 构造函数初始化列表格式（核心配置）
-BreakConstructorInitializers: BeforeComma
-IndentConstructorInitializers: true
-ConstructorInitializerAllOnOneLineOrOnePerLine: false
-AllowShortConstructorsOnASingleLine: true
-
-# 大括号与换行
-BreakBeforeBraces: Attach
-BraceWrapping:
-  AfterClass: false
-  AfterControlStatement: false
-  AfterEnum: false
-  AfterFunction: false
-  AfterNamespace: false
-  AfterStruct: false
-  AfterUnion: false
-  AfterExternBlock: false
-  BeforeElse: false
-  BeforeWhile: false
-
-# 逗号与参数对齐
-AlignAfterOpenBracket: Align
-BinPackParameters: true
-AllowAllParametersOfDeclarationOnNextLine: true
-
-# 指针与引用对齐
+BasedOnStyle: Google
+IndentWidth: 4
+UseTab: Never
+ColumnLimit: 200
+SpaceBeforeParens: Never
+DerivePointerAlignment: false
 PointerAlignment: Left
-
-# 注释与其他
-ReflowComments: false
-SortIncludes: false
-Cpp11BracedListStyle: true
