@@ -35,7 +35,7 @@ struct LLMInfo {
     std::string _modelDesc;     // 模型描述
     std::string _provider;      // 模型提供者
     std::string _endpoint;      // 模型API endpoint base url
-    bool _isAvailabel = false;  // 是否可用
+    bool _isAvailable = false;  // 是否可用
 
     LLMInfo(const std::string& modelName = "", const std::string& modelDesc = "", const std::string& provider = "", const std::string& endpoint = "")
         : _modelName(modelName), _modelDesc(modelDesc), _provider(provider), _endpoint(endpoint) {}
