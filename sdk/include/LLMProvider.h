@@ -24,7 +24,8 @@ class LLMProvider {
     // callback 处理增量数据
     // // param1 : 增量数据
     // // param2 : 是否为最后一个增量数据
-    virtual std::string sendMessageStream(const std::vector<Message> messages, const std::map<std::string, std::string> requestParam, std::function<void(std::string&, bool)> callback) = 0;
+    virtual std::string sendMessageStream(const std::vector<Message> messages, const std::map<std::string, std::string> requestParam,
+                                          std::function<void(const std::string&, bool)> callback) = 0;
 
    protected:                   // 确保在子类中可以访问
     bool _isAvailable = false;  // 模型是否可用
