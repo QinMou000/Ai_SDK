@@ -1,4 +1,4 @@
-#include "../include/DeepSeekProvider.h"
+#include "../include/ChatGPTProvider.h"
 
 #include <httplib.h>
 #include <jsoncpp/json/json.h>
@@ -14,63 +14,78 @@
 
 namespace Ai_Chat_SDK {
 // 初始化模型基本参数
-bool DeepSeekProvider::initModel(const std::map<std::string, std::string>& ModelConfig) {
+bool ChatGPTProvider::initModel(const std::map<std::string, std::string>& ModelConfig) {
     // 1. 初始化 api_key
     auto it = ModelConfig.find("api_key");
     if(it == ModelConfig.end()) {
-        ERR("DeepSeekProvider api_key not found");
+        ERR("ChatGPTProvider api_key not found");
         return false;
     }
     _apiKey = it->second;
     // 2. 初始化 base url
     it = ModelConfig.find("end_point");
     if(it == ModelConfig.end()) {
-        ERR("DeepSeekProvider end_point not found");
+        ERR("ChatGPTProvider end_point not found");
         return false;
     }
     _endpoint = it->second;
 
     _isAvailable = true;
-    INFO("DeepSeekProvider init successed api_key : {} base_url : {}", _apiKey, _endpoint);
+    INFO("ChatGPTProvider init successed api_key : {} base_url : {}", _apiKey, _endpoint);
     return true;
 }
 
 // 检测模型是否可用
-bool DeepSeekProvider::isAvailable() const { return _isAvailable; }
+bool ChatGPTProvider::isAvailable() const { return _isAvailable; }
 
 // 获取模型名称
-std::string DeepSeekProvider::getModelName() const { return "deepseek-chat"; }
+std::string ChatGPTProvider::getModelName() const { return "gpt-4o"; }
 
 // 获取模型信息
-std::string DeepSeekProvider::getModelDesc() const {
-    return "DeepSeek是由深度求索公司开发的免费大语言模型, 支持1M超长上下文、多格式文档处理、联网搜索和语音输入, 可高效完成对话问答、文档分析和信息检索等任务";
+std::string ChatGPTProvider::getModelDesc() const {
+    return "ChatGPT, 一个由 OpenAI 训练的大语言模型，可以帮你解答问题、提供建议、写作和解决各种学习与技术难题";
 }
-/*
-{
-  "model": "deepseek-chat",
-  "messages": [
-    {
-      "role": "system",
-      "content": "你是一个有用的助手"
-    },
-    {
-      "role": "user",
-      "content": "介绍一下DeepSeek"
-    }
-  ],
-  "temperature": 0.7,
-  "max_tokens": 1000,
-  "top_p": 0.95,
-  "frequency_penalty": 0,
-  "presence_penalty": 0,
-  "stream": false
-}
-*/
+// 基本请求 curl
+// curl https://api.openai.com/v1/chat/completions \
+//   -H "Content-Type: application/json" \
+//   -H "Authorization: Bearer YOUR_API_KEY" \
+//   -d '{
+//     "model": "gpt-5.3",
+//     "messages": [
+//       {
+//         "role": "user",
+//         "content": "你好，介绍一下你自己"
+//       }
+//     ],
+//     "temperature": 0.7
+//   }'
+// 返回格式
+// {
+//   "id": "chatcmpl-abc123",
+//   "object": "chat.completion",
+//   "created": 1710000000,
+//   "model": "gpt-5.3",
+//   "choices": [
+//     {
+//       "index": 0,
+//       "message": {
+//         "role": "assistant",
+//         "content": "我是ChatGPT，一个由OpenAI训练的大语言模型..."
+//       },
+//       "finish_reason": "stop"
+//     }
+//   ],
+//   "usage": {
+//     "prompt_tokens": 20,
+//     "completion_tokens": 30,
+//     "total_tokens": 50
+//   }
+// }
 // 发送消息 全量返回
-std::string DeepSeekProvider::sendMessage(const std::vector<Message> messages, const std::map<std::string, std::string> requestParam) {
+std::string ChatGPTProvider::sendMessage(const std::vector<Message> messages, const std::map<std::string, std::string> requestParam) {
     // 1. 判断模型是否可用
     if(!isAvailable()) {
-        ERR("DeepSeekProvider::sendMessage model not available");
+        ERR("ChatGPTProvider::sendMessage model not available");
         return "";
     }
     // 2. 构造请求参数
@@ -104,7 +119,7 @@ std::string DeepSeekProvider::sendMessage(const std::vector<Message> messages, c
     Json::StreamWriterBuilder writeBuilder;                                     // 创建一个JSON写入器的构建器
     writeBuilder["indentation"] = "";                                           // 设置缩进为空字符串
     std::string requsetBodyStr = Json::writeString(writeBuilder, RequestBody);  //  将JSON对象转换为字符串
-    INFO("DeepSeekProvider::sendMessage RequestBody : {}", requsetBodyStr.c_str());
+    INFO("ChatGPTProvider::sendMessage RequestBody : {}", requsetBodyStr.c_str());
 
     // 6. 使用httplib构建客户端
     httplib::Client client(_endpoint.c_str());
@@ -118,14 +133,14 @@ std::string DeepSeekProvider::sendMessage(const std::vector<Message> messages, c
     };
 
     // 8. 发送POST请求
-    auto res = client.Post("/chat/completions", headers, requsetBodyStr, "application/json");
+    auto res = client.Post("/v1/chat/completions", headers, requsetBodyStr, "application/json");
     // 检测响应是否成功
     if(!res) {
-        ERR("DeepSeekProvider::sendMessage POST request failed");
+        ERR("ChatGPTProvider::sendMessage POST request failed");
         return "";
     }
-    INFO("DeepSeekProvider::sendMessage POST request successed, status : {}", res->status);
-    INFO("DeepSeekProvider::sendMessage POST request successed, body : {}", res->body);
+    INFO("ChatGPTProvider::sendMessage POST request successed, status : {}", res->status);
+    INFO("ChatGPTProvider::sendMessage POST request successed, body : {}", res->body);
     // 检测状态码
     if(res->status != 200) {
         return "";
@@ -135,27 +150,6 @@ std::string DeepSeekProvider::sendMessage(const std::vector<Message> messages, c
     Json::CharReaderBuilder readerBuilder;
     std::string parseError;
     std::istringstream responseStream(res->body);
-    /*{
-        "id": "chatcmpl-123456789",
-        "object": "chat.completion",
-        "created": 1700000000,
-        "model": "deepseek-chat",
-        "choices": [
-            {
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": "DeepSeek是一家专注于人工智能技术研发的公司，提供先进的AI模型和服务..."
-            },
-            "finish_reason": "stop"
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 50,
-            "total_tokens": 60
-        }
-        } */
     // 进行反序列化 为json格式
     if(Json::parseFromStream(readerBuilder, responseStream, &responseBody, &parseError)) {
         // 获取choices数组
@@ -165,33 +159,24 @@ std::string DeepSeekProvider::sendMessage(const std::vector<Message> messages, c
             if(choices.isMember("message") && choices["message"].isMember("content")) {
                 // 获取content
                 std::string replyContent = choices["message"]["content"].asString();
-                INFO("DeepSeekProvider::sendMessage response content : {}", replyContent);
+                INFO("ChatGPTProvider::sendMessage response content : {}", replyContent);
                 return replyContent;
             }
         }
     }
     // 10. 解析失败
-    ERR("DeepSeekProvider::sendMessage response parse failed");
-    return "deepseek response json parse failed";
+    ERR("ChatGPTProvider::sendMessage response parse failed");
+    return "ChatGPT response json parse failed";
 }
-/*
-{
-  "model": "deepseek-chat",
-  "messages": [
-    {
-      "role": "user",
-      "content": "写一个Python函数"
-    }
-  ],
-  "stream": true
-}
-*/
 // 发送消息 增量返回 流式响应
-std::string DeepSeekProvider::sendMessageStream(const std::vector<Message> messages, const std::map<std::string, std::string> requestParam,
-                                                std::function<void(const std::string&, bool)> callback) {
+// callback 处理增量数据
+// // param1 : 增量数据
+// // param2 : 是否为最后一个增量数据
+std::string ChatGPTProvider::sendMessageStream(const std::vector<Message> messages, const std::map<std::string, std::string> requestParam,
+                                               std::function<void(const std::string&, bool)> callback) {
     // 1. 检测模型是否可用
     if(!_isAvailable) {
-        ERR("DeepSeekProvider::sendMessageStream model not available");
+        ERR("ChatGPTProvider::sendMessageStream model not available");
         return "";
     }
     // 2. 构建请求参数
@@ -225,7 +210,7 @@ std::string DeepSeekProvider::sendMessageStream(const std::vector<Message> messa
     Json::StreamWriterBuilder writeBuilder;                                     // 创建一个JSON写入器的构建器
     writeBuilder["indentation"] = "";                                           // 设置缩进为空字符串
     std::string requsetBodyStr = Json::writeString(writeBuilder, RequestBody);  //  将JSON对象转换为字符串
-    INFO("DeepSeekProvider::sendMessageStream RequestBody : {}", requsetBodyStr.c_str());
+    INFO("ChatGPTProvider::sendMessageStream RequestBody : {}", requsetBodyStr.c_str());
     // 6. 使用httplib构建客户端
     httplib::Client client(_endpoint.c_str());
     client.set_connection_timeout(30, 0);  // param1:second param2:usecond
@@ -242,7 +227,7 @@ std::string DeepSeekProvider::sendMessageStream(const std::vector<Message> messa
     // 9. 创建请求对象 并初始化
     httplib::Request req;
     req.method = "POST";
-    req.path = "/chat/completions";
+    req.path = "/v1/chat/completions";
     req.headers = headers;
     req.body = requsetBodyStr;
     // 10. 设置响应处理器
@@ -251,7 +236,7 @@ std::string DeepSeekProvider::sendMessageStream(const std::vector<Message> messa
         if(response.status != 200) {
             gotError = true;
             errorMsg = "HTTP status code: " + std::to_string(response.status);
-            ERR("DeepSeekProvider::sendMessageStream::response_handler : {}", errorMsg);
+            ERR("ChatGPTProvider::sendMessageStream::response_handler : {}", errorMsg);
             return false;  // 终止请求
         }
         return true;  // 继续请求
@@ -265,7 +250,7 @@ std::string DeepSeekProvider::sendMessageStream(const std::vector<Message> messa
         }
         // 追加数据到buffer
         buffer.append(data, data_length);
-        INFO("DeepSeekProvider::sendMessageStream::content_receiver buffer : {}", buffer);
+        INFO("ChatGPTProvider::sendMessageStream::content_receiver buffer : {}", buffer);
         // 处理所有流式数据块 数据块之间以\n\n进行分割
         size_t pos = 0;
         while((pos = buffer.find("\n\n")) != std::string::npos) {
@@ -285,23 +270,6 @@ std::string DeepSeekProvider::sendMessageStream(const std::vector<Message> messa
                     callback("", true);
                     return true;
                 }
-                /*
-                {
-                    "id": "chatcmpl-123456789",
-                    "object": "chat.completion.chunk",
-                    "created": 1700000000,
-                    "model": "deepseek-chat",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {
-                                "content": "这是"
-                        },
-                        "finish_reason": null
-                        }
-                    ]
-                }
-                */
                 // 将得到的流式数据反序列化为json
                 Json::Value modelDataJson;
                 Json::CharReaderBuilder reader;
@@ -318,7 +286,7 @@ std::string DeepSeekProvider::sendMessageStream(const std::vector<Message> messa
                         callback(content, false);
                     } else {
                         // 解析失败
-                        WARN("DeepSeekProvider::sendMessageStream::parseFromStream parse failed : {}", errors);
+                        WARN("ChatGPTProvider::sendMessageStream::parseFromStream parse failed : {}", errors);
                         // continue;
                     }
                 }
@@ -329,7 +297,7 @@ std::string DeepSeekProvider::sendMessageStream(const std::vector<Message> messa
     httplib::Result result = client.send(req);
     if(!result) {
         // 请求发送失败
-        ERR("DeepSeekProvider::sendMessageStream client.send failed : {}", httplib::to_string(result.error()));
+        ERR("ChatGPTProvider::sendMessageStream client.send failed : {}", httplib::to_string(result.error()));
         return "";
     }
     if(!streamFinish) {

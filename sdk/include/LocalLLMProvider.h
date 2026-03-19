@@ -6,9 +6,8 @@
 
 #include "LLMProvider.h"
 #include "common.h"
-
 namespace Ai_Chat_SDK {
-class DeepSeekProvider : public LLMProvider {
+class LocalLLMProvider : public LLMProvider {
    public:
     // 初始化模型
     virtual bool initModel(const std::map<std::string, std::string>& ModelConfig);
@@ -27,5 +26,4 @@ class DeepSeekProvider : public LLMProvider {
     virtual std::string sendMessageStream(const std::vector<Message> messages, const std::map<std::string, std::string> requestParam,
                                           std::function<void(const std::string&, bool)> callback);
 };
-
 }  // namespace Ai_Chat_SDK

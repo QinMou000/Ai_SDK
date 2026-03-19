@@ -8,7 +8,7 @@
 #include "common.h"
 
 namespace Ai_Chat_SDK {
-class DeepSeekProvider : public LLMProvider {
+class GeminiProvider : public LLMProvider {
    public:
     // 初始化模型
     virtual bool initModel(const std::map<std::string, std::string>& ModelConfig);

@@ -42,6 +42,9 @@ endif()
 # ==============================================================================
 set(SDK_SOURCES
     ../sdk/src/DeepSeekProvider.cpp
+    ../sdk/src/ChatGPTProvider.cpp
+    ../sdk/src/GeminiProvider.cpp
+    ../sdk/src/LocalLLMProvider.cpp
     ../sdk/src/util/Log.cpp
 )
 
