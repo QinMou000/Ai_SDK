@@ -82,7 +82,7 @@ std::string ChatGPTProvider::getModelDesc() const {
 //   }
 // }
 // 发送消息 全量返回
-std::string ChatGPTProvider::sendMessage(const std::vector<Message> messages, const std::map<std::string, std::string> requestParam) {
+std::string ChatGPTProvider::sendMessage(const std::vector<Message>& messages, const std::map<std::string, std::string>& requestParam) {
     // 1. 判断模型是否可用
     if(!isAvailable()) {
         ERR("ChatGPTProvider::sendMessage model not available");
@@ -172,7 +172,7 @@ std::string ChatGPTProvider::sendMessage(const std::vector<Message> messages, co
 // callback 处理增量数据
 // // param1 : 增量数据
 // // param2 : 是否为最后一个增量数据
-std::string ChatGPTProvider::sendMessageStream(const std::vector<Message> messages, const std::map<std::string, std::string> requestParam,
+std::string ChatGPTProvider::sendMessageStream(const std::vector<Message>& messages, const std::map<std::string, std::string>& requestParam,
                                                std::function<void(const std::string&, bool)> callback) {
     // 1. 检测模型是否可用
     if(!_isAvailable) {

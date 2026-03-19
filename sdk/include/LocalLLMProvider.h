@@ -18,12 +18,12 @@ class LocalLLMProvider : public LLMProvider {
     // 检测模型是否有效
     virtual bool isAvailable() const;
     // 发送消息 全量返回
-    virtual std::string sendMessage(const std::vector<Message> messages, const std::map<std::string, std::string> requestParam);
+    virtual std::string sendMessage(const std::vector<Message>& messages, const std::map<std::string, std::string>& requestParam);
     // 发送消息 增量返回 流式响应
     // callback 处理增量数据
     // // param1 : 增量数据
     // // param2 : 是否为最后一个增量数据
-    virtual std::string sendMessageStream(const std::vector<Message> messages, const std::map<std::string, std::string> requestParam,
+    virtual std::string sendMessageStream(const std::vector<Message>& messages, const std::map<std::string, std::string>& requestParam,
                                           std::function<void(const std::string&, bool)> callback);
 };
 }  // namespace Ai_Chat_SDK
