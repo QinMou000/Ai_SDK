@@ -7,10 +7,11 @@
 #include "../sdk/include/ChatGPTProvider.h"
 #include "../sdk/include/DeepSeekProvider.h"
 #include "../sdk/include/GeminiProvider.h"
+#include "../sdk/include/LLMManager.h"
 #include "../sdk/include/LocalLLMProvider.h"
 #include "../sdk/include/util/Log.h"
 
-#define LocalLLM
+#define LLMMANAGER
 
 int main(int argc, char** argv) {
     // 初始化 spdlog
@@ -79,6 +80,26 @@ TEST(LocalLLMProviderTest, sendMessage) {
     };
 
     std::string response = provider->sendMessageStream(messages, requestParam, callback);
+    INFO("content : {}", response);
+    ASSERT_FALSE(response.empty());
+}
+#endif
+#ifdef LLMMANAGER
+TEST(LLMManagerTest, sendMessage) {
+    std::unique_ptr<Ai_Chat_SDK::LLMProvider> provider = std::make_unique<Ai_Chat_SDK::LocalLLMProvider>();
+    ASSERT_TRUE(provider);
+    std::string modelName = provider->getModelName();
+
+    auto manager = std::make_shared<Ai_Chat_SDK::LLMManager>();
+    manager->registerModel(modelName, std::move(provider));
+
+    std::map<std::string, std::string> ModelConfig = {{"api_key", ""}, {"end_point", "http://192.168.0.96:1234"}};
+    manager->initModel(modelName, ModelConfig);
+
+    std::map<std::string, std::string> requestParam{{"temperature", "0.1"}, {"max_tokens", "4096"}};
+    std::vector<Ai_Chat_SDK::Message> messages;
+    messages.push_back({"user", "你给我讲个笑话吧"});
+    std::string response = manager->sendMessage(modelName, messages, requestParam);
     INFO("content : {}", response);
     ASSERT_FALSE(response.empty());
 }

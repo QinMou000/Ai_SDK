@@ -45,6 +45,7 @@ set(SDK_SOURCES
     ../sdk/src/ChatGPTProvider.cpp
     ../sdk/src/GeminiProvider.cpp
     ../sdk/src/LocalLLMProvider.cpp
+    ../sdk/src/LLMManager.cpp
     ../sdk/src/util/Log.cpp
 )
 
@@ -71,6 +72,7 @@ target_link_libraries(test PRIVATE
     GTest::gtest
     OpenSSL::SSL
     OpenSSL::Crypto
+    sqlite3
     ${JSONCPP_LIB_TARGET}
     pthread
 )

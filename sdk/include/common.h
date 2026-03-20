@@ -28,6 +28,9 @@ struct CloudConfig : public Config {
 };
 
 // 本地模型
+// struct LocalLLMConfig : public Config {
+
+// }
 
 // LLM具体信息
 struct LLMInfo {
