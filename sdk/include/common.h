@@ -12,7 +12,7 @@ struct Message {
     std::string _content;    // 消息内容
     std::time_t _timestamp;  // 消息时间戳
 
-    Message(const std::string& role, const std::string& content) : _role(role), _content(content) {}
+    Message(const std::string& role = "", const std::string& content = "") : _role(role), _content(content) {}
 };
 
 // 所有模型的公共配置信息
