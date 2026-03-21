@@ -5,16 +5,19 @@
 #include <vector>
 
 #include "../sdk/include/ChatGPTProvider.h"
+#include "../sdk/include/DataManager.h"
 #include "../sdk/include/DeepSeekProvider.h"
 #include "../sdk/include/GeminiProvider.h"
 #include "../sdk/include/LLMManager.h"
 #include "../sdk/include/LocalLLMProvider.h"
+#include "../sdk/include/SessionManager.h"
 #include "../sdk/include/util/Log.h"
 
 // #define LLMMANAGER
 // #define DeepSeek
-#define ChatGPT
+// #define ChatGPT
 // #define LocalLLM
+#define SESSIONMANAGER
 
 int main(int argc, char** argv) {
     // 初始化 spdlog
@@ -45,6 +48,73 @@ TEST(DeepSeekProviderTest, sendMessage) {
     std::string response = provider->sendMessageStream(messages, requestParam, callback);
     INFO("content : {}", response);
     ASSERT_FALSE(response.empty());
+}
+#endif
+
+#ifdef SESSIONMANAGER
+TEST(SessionManagerTest, basicOperations) {
+    auto manager = std::make_shared<Ai_Chat_SDK::SessionManager>("test_chat.db");
+
+    // 1. 测试清空所有会话 (清理环境)
+    manager->clearAllSessions();
+    ASSERT_EQ(manager->getSessionCount(), 0);
+
+    // 2. 测试创建会话
+    std::string modelName = "test_model";
+    std::string sessionId = manager->createSession(modelName);
+    ASSERT_FALSE(sessionId.empty());
+    ASSERT_EQ(manager->getSessionCount(), 1);
+
+    // 3. 测试获取会话
+    auto session = manager->getSession(sessionId);
+    ASSERT_NE(session, nullptr);
+    ASSERT_EQ(session->_modelName, modelName);
+    ASSERT_EQ(session->_sessionId, sessionId);
+
+    // 4. 测试添加消息
+    Ai_Chat_SDK::Message msg1("user", "Hello!");
+    ASSERT_TRUE(manager->addMessage(sessionId, msg1));
+
+    Ai_Chat_SDK::Message msg2("assistant", "Hi there!");
+    ASSERT_TRUE(manager->addMessage(sessionId, msg2));
+
+    // 5. 测试获取历史消息
+    auto history = manager->getHistroyMessages(sessionId);
+    ASSERT_EQ(history.size(), 2);
+    ASSERT_EQ(history[0]._role, "user");
+    ASSERT_EQ(history[0]._content, "Hello!");
+    ASSERT_EQ(history[1]._role, "assistant");
+    ASSERT_EQ(history[1]._content, "Hi there!");
+
+    // 6. 测试会话列表排序 (后活动的排在前面)
+    std::string sessionId2 = manager->createSession("test_model_2");
+    Ai_Chat_SDK::Message msg3("user", "Update session 2");
+    manager->addMessage(sessionId2, msg3);
+
+    auto sessionLists = manager->getSessionLists();
+    ASSERT_EQ(sessionLists.size(), 2);
+    // session2 最近有消息更新，所以应该排在第一位
+    ASSERT_EQ(sessionLists[0], sessionId2);
+    ASSERT_EQ(sessionLists[1], sessionId);
+
+    // 7. 测试重启恢复 (模拟DataManager从数据库加载)
+    // 销毁旧的manager，重新创建一个新的manager来模拟程序重启
+    manager.reset();
+    auto newManager = std::make_shared<Ai_Chat_SDK::SessionManager>("test_chat.db");
+
+    // 这里应该是 2 个会话，因为前面的代码中并没有删除任何会话
+    ASSERT_EQ(newManager->getSessionCount(), 2);
+    auto recoveredSession = newManager->getSession(sessionId);
+    ASSERT_NE(recoveredSession, nullptr);
+    // 检查是否懒加载成功恢复了消息
+    auto recoveredHistory = newManager->getHistroyMessages(sessionId);
+    ASSERT_EQ(recoveredHistory.size(), 2);
+    ASSERT_EQ(recoveredHistory[0]._content, "Hello!");
+
+    // 8. 测试删除会话
+    ASSERT_TRUE(newManager->deleteSession(sessionId));
+    ASSERT_EQ(newManager->getSessionCount(), 1);
+    ASSERT_EQ(newManager->getSession(sessionId), nullptr);
 }
 #endif
 #ifdef ChatGPT

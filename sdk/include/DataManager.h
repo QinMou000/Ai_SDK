@@ -22,9 +22,9 @@ class DataManager {
     // 删除指定会话 同时删除所有消息
     bool deleteSession(const std::string& SessionId);
     // 列出所有会话id
-    std::vector<std::string> listAllSessionIds();
+    std::vector<std::string> listAllSessionIds()const;
     // 列出所有会话
-    std::vector<std::shared_ptr<Session>> listAllSessions();
+    std::vector<std::shared_ptr<Session>> listAllSessions()const;
     // 获取会话总数
     int getSessionCount() const;
     // 清空所有会话 同时删除所有消息

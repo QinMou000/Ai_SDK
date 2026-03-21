@@ -120,7 +120,11 @@ std::shared_ptr<Session> DataManager::getSession(const std::string& SessionId) c
     rc = sqlite3_bind_text(smt, 1, SessionId.c_str(), -1, SQLITE_TRANSIENT);
     // 执行SQL
     rc = sqlite3_step(smt);
-    if(rc != SQLITE_ROW) {
+    if(rc == SQLITE_DONE) {
+        // 正常执行完毕，但没有查到该记录
+        sqlite3_finalize(smt);
+        return nullptr;
+    } else if(rc != SQLITE_ROW) {
         ERR("execute SQL {} failed, error message : {}", selectSessionSQL, sqlite3_errmsg(_db));
         sqlite3_finalize(smt);
         return nullptr;
@@ -197,7 +201,7 @@ bool DataManager::deleteSession(const std::string& SessionId) {
     return true;
 }
 // 列出所有会话id 并按照更新时间 降序排列
-std::vector<std::string> DataManager::listAllSessionIds() {
+std::vector<std::string> DataManager::listAllSessionIds() const {
     std::lock_guard<std::mutex> lock(_mutex);
     std::vector<std::string> sessionIds;
     std::string selectSessionIdsSQL = "SELECT SessionId FROM Sessions ORDER BY LastActiveTime DESC;";
@@ -221,7 +225,7 @@ std::vector<std::string> DataManager::listAllSessionIds() {
     return sessionIds;
 }
 // 列出所有会话 并按照更新时间 降序排列
-std::vector<std::shared_ptr<Session>> DataManager::listAllSessions() {
+std::vector<std::shared_ptr<Session>> DataManager::listAllSessions() const {
     std::lock_guard<std::mutex> lock(_mutex);
 
     std::vector<std::shared_ptr<Session>> sessions;
@@ -247,7 +251,7 @@ std::vector<std::shared_ptr<Session>> DataManager::listAllSessions() {
         session->_createAt = static_cast<std::time_t>(createTime);
         session->_updateAt = static_cast<std::time_t>(lastActiveTime);
         // 历史消息暂时不获取
-        // session->_messages = getSessionMessages(session->_sessionId);
+        session->_messages = getSessionMessagesNoLock(session->_sessionId);
         sessions.push_back(session);
 
         rc = sqlite3_step(smt);

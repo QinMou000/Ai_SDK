@@ -5,6 +5,7 @@
 #include <unordered_map>
 
 #include "common.h"
+#include "DataManager.h"
 
 namespace Ai_Chat_SDK {
 class SessionManager {
@@ -32,13 +33,14 @@ class SessionManager {
    private:
     // 生成回话id session_时间戳_会话计数
     std::string generaterSessionId();
-    // 生成消息id msg_时间戳_会话计数
-    std::string generaterMessageId(size_t messageCounter);
+    // 生成消息id msg_会话id_时间戳_会话计数
+    std::string generaterMessageId(const std::string& sessionId, size_t messageCounter);
 
    private:
     std::unordered_map<std::string, std::shared_ptr<Session> > _session;  // key: 会话ID value: 会话信息
     mutable std::mutex _mutex;                                            // mutable 作用是让该变量在 const 成员函数或 const 对象中仍可被修改
     std::atomic<int64_t> _sessionCounter = {0};
+    DataManager _dataManager;
 };
 
 }  // namespace Ai_Chat_SDK

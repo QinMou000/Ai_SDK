@@ -46,6 +46,8 @@ set(SDK_SOURCES
     ../sdk/src/GeminiProvider.cpp
     ../sdk/src/LocalLLMProvider.cpp
     ../sdk/src/LLMManager.cpp
+    ../sdk/src/SessionManager.cpp
+    ../sdk/src/DataManager.cpp
     ../sdk/src/util/Log.cpp
 )
 
