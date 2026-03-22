@@ -11,13 +11,15 @@
 #include "../sdk/include/LLMManager.h"
 #include "../sdk/include/LocalLLMProvider.h"
 #include "../sdk/include/SessionManager.h"
+#include "../sdk/include/ChatSDK.h"
 #include "../sdk/include/util/Log.h"
 
 // #define LLMMANAGER
 // #define DeepSeek
 // #define ChatGPT
 // #define LocalLLM
-#define SESSIONMANAGER
+// #define SESSIONMANAGER
+#define CHATSDK
 
 int main(int argc, char** argv) {
     // 初始化 spdlog
@@ -48,6 +50,68 @@ TEST(DeepSeekProviderTest, sendMessage) {
     std::string response = provider->sendMessageStream(messages, requestParam, callback);
     INFO("content : {}", response);
     ASSERT_FALSE(response.empty());
+}
+#endif
+
+#ifdef CHATSDK
+TEST(ChatSDKTest, basicOperations) {
+    // 1. 初始化 SDK
+    Ai_Chat_SDK::ChatSDK sdk("test_chatsdk.db");
+    ASSERT_TRUE(sdk.init());
+
+    // 2. 清理环境，防止脏数据干扰
+    sdk.clearAllSessions();
+
+    // 3. 注册并初始化模型
+    auto provider = std::make_unique<Ai_Chat_SDK::LocalLLMProvider>();
+    std::string modelName = provider->getModelName();
+    ASSERT_TRUE(sdk.registerModel(modelName, std::move(provider)));
+
+    std::map<std::string, std::string> modelParam = {{"api_key", ""}, {"end_point", "http://192.168.0.96:1234"}};
+    Ai_Chat_SDK::Config config;
+    config._temperature = 0.1;
+    config._maxTokens = 4096;
+    ASSERT_TRUE(sdk.initModel(modelName, modelParam, config));
+
+    // 4. 获取可用模型
+    auto models = sdk.getAvailableModels();
+    ASSERT_FALSE(models.empty());
+    bool found = false;
+    for (const auto& m : models) {
+        if (m._modelName == modelName) {
+            found = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(found);
+
+    // 5. 创建会话
+    std::string sessionId = sdk.createSession(modelName);
+    ASSERT_FALSE(sessionId.empty());
+
+    // 6. 获取会话列表
+    auto sessions = sdk.getSessionLists();
+    ASSERT_EQ(sessions.size(), 1);
+    ASSERT_EQ(sessions[0], sessionId);
+
+    // 7. 发送消息并获取回复 (全量)
+    std::string reply = sdk.sendMessage(sessionId, "你好，请回复'Hello'");
+    INFO("ChatSDK Reply: {}", reply);
+    ASSERT_FALSE(reply.empty());
+
+    // 8. 验证会话消息记录
+    auto session = sdk.getSession(sessionId);
+    ASSERT_NE(session, nullptr);
+    ASSERT_EQ(session->_messages.size(), 2);
+    ASSERT_EQ(session->_messages[0]._role, "user");
+    ASSERT_EQ(session->_messages[0]._content, "你好，请回复'Hello'");
+    ASSERT_EQ(session->_messages[1]._role, "assistant");
+    ASSERT_EQ(session->_messages[1]._content, reply);
+
+    // 9. 删除会话
+    ASSERT_TRUE(sdk.deleteSession(sessionId));
+    sessions = sdk.getSessionLists();
+    ASSERT_TRUE(sessions.empty());
 }
 #endif
 

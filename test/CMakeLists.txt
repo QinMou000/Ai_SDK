@@ -18,7 +18,7 @@ endif()
 find_package(spdlog REQUIRED)
 find_package(fmt REQUIRED)
 find_package(GTest REQUIRED)
-find_package(OpenSSL REQUIRED)
+find_package(OpenSSL QUIET)
 
 # 查找 JsonCpp (优先尝试 Config 模式，失败则回退到 PkgConfig)
 find_package(jsoncpp QUIET)
@@ -48,6 +48,7 @@ set(SDK_SOURCES
     ../sdk/src/LLMManager.cpp
     ../sdk/src/SessionManager.cpp
     ../sdk/src/DataManager.cpp
+    ../sdk/src/ChatSDK.cpp
     ../sdk/src/util/Log.cpp
 )
 
@@ -59,12 +60,17 @@ add_executable(test
     ${SDK_SOURCES}
 )
 
-# 启用 httplib 的 HTTPS 支持 (需要 OpenSSL)
-target_compile_definitions(test PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+set(AI_SDK_ENABLE_HTTPS OFF)
+if(OpenSSL_FOUND AND OpenSSL_VERSION VERSION_GREATER_EQUAL "3.0.0")
+    set(AI_SDK_ENABLE_HTTPS ON)
+endif()
+
+if(AI_SDK_ENABLE_HTTPS)
+    target_compile_definitions(test PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+endif()
 
 target_include_directories(test PRIVATE 
     ../sdk/include
-    ${OPENSSL_INCLUDE_DIR}
     ${JSONCPP_INCLUDE_DIRS}
 )
 
@@ -72,9 +78,12 @@ target_link_libraries(test PRIVATE
     spdlog::spdlog
     fmt::fmt
     GTest::gtest
-    OpenSSL::SSL
-    OpenSSL::Crypto
     sqlite3
     ${JSONCPP_LIB_TARGET}
     pthread
 )
+
+if(AI_SDK_ENABLE_HTTPS)
+    target_include_directories(test PRIVATE ${OPENSSL_INCLUDE_DIR})
+    target_link_libraries(test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()

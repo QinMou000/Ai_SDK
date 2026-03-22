@@ -24,11 +24,11 @@ class Logger {
 // fmt 库
 // incldue <format>
 // string s = std::format("hello {}", "world")
-#define TRACE(format, ...) Util::Logger::getInstance()->trace(SPDLOG_FMT_RUNTIME(std::string("[{}:{}] ") + (format)), __FILE__, __LINE__, ##__VA_ARGS__)
-#define DBG(format, ...) Util::Logger::getInstance()->debug(SPDLOG_FMT_RUNTIME(std::string("[{}:{}] ") + (format)), __FILE__, __LINE__, ##__VA_ARGS__)
-#define INFO(format, ...) Util::Logger::getInstance()->info(SPDLOG_FMT_RUNTIME(std::string("[{}:{}] ") + (format)), __FILE__, __LINE__, ##__VA_ARGS__)
-#define WARN(format, ...) Util::Logger::getInstance()->warn(SPDLOG_FMT_RUNTIME(std::string("[{}:{}] ") + (format)), __FILE__, __LINE__, ##__VA_ARGS__)
-#define ERR(format, ...) Util::Logger::getInstance()->error(SPDLOG_FMT_RUNTIME(std::string("[{}:{}] ") + (format)), __FILE__, __LINE__, ##__VA_ARGS__)
-#define CRIT(format, ...) Util::Logger::getInstance()->critical(SPDLOG_FMT_RUNTIME(std::string("[{}:{}] ") + (format)), __FILE__, __LINE__, ##__VA_ARGS__)
+#define TRACE(format, ...) Util::Logger::getInstance()->trace(std::string("[{}:{}] ") + (format), __FILE__, __LINE__, ##__VA_ARGS__)
+#define DBG(format, ...) Util::Logger::getInstance()->debug(std::string("[{}:{}] ") + (format), __FILE__, __LINE__, ##__VA_ARGS__)
+#define INFO(format, ...) Util::Logger::getInstance()->info(std::string("[{}:{}] ") + (format), __FILE__, __LINE__, ##__VA_ARGS__)
+#define WARN(format, ...) Util::Logger::getInstance()->warn(std::string("[{}:{}] ") + (format), __FILE__, __LINE__, ##__VA_ARGS__)
+#define ERR(format, ...) Util::Logger::getInstance()->error(std::string("[{}:{}] ") + (format), __FILE__, __LINE__, ##__VA_ARGS__)
+#define CRIT(format, ...) Util::Logger::getInstance()->critical(std::string("[{}:{}] ") + (format), __FILE__, __LINE__, ##__VA_ARGS__)
 
 }  // namespace Util
