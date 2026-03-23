@@ -26,13 +26,13 @@ int main(int argc, char** argv) {
     gflags::ParseCommandLineFlags(&argc, &argv, true);
 
     // 处理-h/--help
-    if (FLAGS_h || FLAGS_help) {
+    if (FLAGS_h) {
         Ai_Chat_Server::printHelp(argv[0]);
         return 0;
     }
 
     // 处理-v/--version
-    if (FLAGS_v || FLAGS_version) {
+    if (FLAGS_v) {
         Ai_Chat_Server::printVersion();
         return 0;
     }
@@ -40,10 +40,23 @@ int main(int argc, char** argv) {
     // 创建服务器配置
     Ai_Chat_Server::ServerConfig config;
 
-    // 从配置文件加载（如果指定）
+    // 从配置文件加载（优先命令行指定，其次默认当前目录）
+    auto loadConfig = [&](const std::string& filePath) {
+        if (Ai_Chat_Server::parseConfigFile(filePath, config)) {
+            std::cout << "已加载配置文件: " << filePath << std::endl;
+            return true;
+        }
+        std::cerr << "无法加载配置文件: " << filePath << "，使用默认配置或环境变量" << std::endl;
+        return false;
+    };
+
     if (!FLAGS_config_file.empty()) {
-        if (!Ai_Chat_Server::parseConfigFile(FLAGS_config_file, config)) {
-            std::cerr << "配置文件加载失败，使用命令行参数" << std::endl;
+        loadConfig(FLAGS_config_file);
+    } else {
+        // 默认尝试当前目录下的 ChatServer.conf
+        if (!loadConfig("ChatServer.conf")) {
+            // 也尝试上级目录（如从 build 目录启动）
+            loadConfig("../ChatServer.conf");
         }
     }
 

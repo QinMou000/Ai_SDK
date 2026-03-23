@@ -98,7 +98,7 @@ class ChatServer {
     const ServerConfig& getConfig() const { return _config; }
 
     // 获取可用模型
-    std::vector<LLMInfo> getAvailableModels() const;
+    std::vector<Ai_Chat_SDK::LLMInfo> getAvailableModels() const;
 
    private:
     // 加载配置文件

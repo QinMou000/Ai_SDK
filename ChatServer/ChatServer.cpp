@@ -1,9 +1,9 @@
 #include "ChatServer.h"
 
 #include <csignal>
-#include <sstream>
-#include <fstream>
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -12,12 +12,13 @@
 #include <unistd.h>
 #endif
 
+#include <json/json.h>
+
 #include "../sdk/include/ChatGPTProvider.h"
 #include "../sdk/include/DeepSeekProvider.h"
 #include "../sdk/include/GeminiProvider.h"
 #include "../sdk/include/LocalLLMProvider.h"
-
-#include <json/json.h>
+#include "../sdk/include/util/Log.h"
 
 // 跨平台路径分隔符
 #ifdef _WIN32
@@ -39,27 +40,24 @@ namespace Ai_Chat_Server {
 // 静态变量
 static std::atomic<bool> g_shutdown(false);
 
-ChatServer::ChatServer()
-    : _server(nullptr), _running(false) {
+ChatServer::ChatServer() : _server(nullptr), _running(false) {
     // 设置信号处理
     std::signal(SIGINT, [](int) { g_shutdown = true; });
     std::signal(SIGTERM, [](int) { g_shutdown = true; });
 }
 
-ChatServer::~ChatServer() {
-    stop();
-}
+ChatServer::~ChatServer() { stop(); }
 
 bool ChatServer::init(const ServerConfig& config) {
     _config = config;
 
     // 初始化日志
     spdlog::level::level_enum level = spdlog::level::info;
-    if (config._logLevel == "DEBUG") {
+    if(config._logLevel == "DEBUG") {
         level = spdlog::level::debug;
-    } else if (config._logLevel == "WARN" || config._logLevel == "WARNING") {
+    } else if(config._logLevel == "WARN" || config._logLevel == "WARNING") {
         level = spdlog::level::warn;
-    } else if (config._logLevel == "ERROR") {
+    } else if(config._logLevel == "ERROR") {
         level = spdlog::level::err;
     }
     Util::Logger::initLogger("ChatServer", "stdout", level);
@@ -71,8 +69,8 @@ bool ChatServer::init(const ServerConfig& config) {
     _llmManager = std::make_unique<Ai_Chat_SDK::LLMManager>();
 
     // 初始化模型
-    if (!initModels()) {
-        ERROR("初始化模型失败");
+    if(!initModels()) {
+        ERR("初始化模型失败");
         return false;
     }
 
@@ -88,10 +86,10 @@ bool ChatServer::init(const ServerConfig& config) {
 
 bool ChatServer::initModels() {
     // 注册DeepSeek模型
-    if (!_config._deepseekApiKey.empty()) {
+    if(!_config._deepseekApiKey.empty()) {
         auto deepseek = std::make_unique<Ai_Chat_SDK::DeepSeekProvider>();
         std::map<std::string, std::string> config = {{"api_key", _config._deepseekApiKey}, {"end_point", "https://api.deepseek.com"}};
-        if (deepseek->initModel(config)) {
+        if(deepseek->initModel(config)) {
             _llmManager->registerModel("deepseek", std::move(deepseek));
             INFO("DeepSeek 模型注册成功");
         } else {
@@ -100,10 +98,10 @@ bool ChatServer::initModels() {
     }
 
     // 注册ChatGPT模型
-    if (!_config._chatgptApiKey.empty()) {
+    if(!_config._chatgptApiKey.empty()) {
         auto chatgpt = std::make_unique<Ai_Chat_SDK::ChatGPTProvider>();
         std::map<std::string, std::string> config = {{"api_key", _config._chatgptApiKey}, {"end_point", "https://api.openai.com"}};
-        if (chatgpt->initModel(config)) {
+        if(chatgpt->initModel(config)) {
             _llmManager->registerModel("chatgpt", std::move(chatgpt));
             INFO("ChatGPT 模型注册成功");
         } else {
@@ -112,10 +110,10 @@ bool ChatServer::initModels() {
     }
 
     // 注册Gemini模型
-    if (!_config._geminiApiKey.empty()) {
+    if(!_config._geminiApiKey.empty()) {
         auto gemini = std::make_unique<Ai_Chat_SDK::GeminiProvider>();
         std::map<std::string, std::string> config = {{"api_key", _config._geminiApiKey}, {"end_point", "https://generativelanguage.googleapis.com"}};
-        if (gemini->initModel(config)) {
+        if(gemini->initModel(config)) {
             _llmManager->registerModel("gemini", std::move(gemini));
             INFO("Gemini 模型注册成功");
         } else {
@@ -124,10 +122,10 @@ bool ChatServer::initModels() {
     }
 
     // 注册Ollama本地模型
-    if (!_config._ollamaEndpoint.empty() && !_config._ollamaModel.empty()) {
+    if(!_config._ollamaEndpoint.empty() && !_config._ollamaModel.empty()) {
         auto ollama = std::make_unique<Ai_Chat_SDK::LocalLLMProvider>();
         std::map<std::string, std::string> config = {{"api_key", ""}, {"end_point", _config._ollamaEndpoint}};
-        if (ollama->initModel(config)) {
+        if(ollama->initModel(config)) {
             _llmManager->registerModel(_config._ollamaModel, std::move(ollama));
             INFO("Ollama 模型注册成功: {}", _config._ollamaModel);
         } else {
@@ -140,61 +138,120 @@ bool ChatServer::initModels() {
 
 void ChatServer::setupRoutes() {
     // 获取会话列表
-    _server->Get("/api/sessions", [this](const httplib::Request& req, httplib::Response& res) {
-        handleGetSessions(req, res);
-    });
+    _server->Get("/api/sessions", [this](const httplib::Request& req, httplib::Response& res) { handleGetSessions(req, res); });
 
     // 获取可用模型
-    _server->Get("/api/models", [this](const httplib::Request& req, httplib::Response& res) {
-        handleGetModels(req, res);
-    });
+    _server->Get("/api/models", [this](const httplib::Request& req, httplib::Response& res) { handleGetModels(req, res); });
 
     // 创建新会话
-    _server->Post("/api/session", [this](const httplib::Request& req, httplib::Response& res) {
-        handleCreateSession(req, res);
-    });
+    _server->Post("/api/session", [this](const httplib::Request& req, httplib::Response& res) { handleCreateSession(req, res); });
 
     // 获取会话历史
-    _server->Get(R"(/api/session/([^/]+)/history)", [this](const httplib::Request& req, httplib::Response& res) {
-        handleGetSessionHistory(req, res);
-    });
+    _server->Get(R"(/api/session/([^/]+)/history)", [this](const httplib::Request& req, httplib::Response& res) { handleGetSessionHistory(req, res); });
 
     // 删除会话
-    _server->Delete(R"(/api/session/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
-        handleDeleteSession(req, res);
-    });
+    _server->Delete(R"(/api/session/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) { handleDeleteSession(req, res); });
 
     // 发送消息 - 流式响应
     _server->Post("/api/message/async", [this](const httplib::Request& req, httplib::Response& res) {
-        handleSendMessageStream(req, res);
+        // SSE (Server-Sent Events) 需要在请求处理器中进行持续响应
+        // 注意：cpp-httplib 的最新版本中，对于 SSE 或流式响应，应该使用 set_content_provider
+
+        std::lock_guard<std::mutex> lock(_mutex);
+
+        Json::Value root;
+        Json::CharReaderBuilder builder;
+        std::istringstream stream(req.body);
+        std::string errs;
+
+        Json::Value requestJson;
+        if(!Json::parseFromStream(builder, stream, &requestJson, &errs)) {
+            root["success"] = false;
+            root["message"] = "请求参数解析失败";
+            Json::StreamWriterBuilder writer;
+            res.set_content(Json::writeString(writer, root), "application/json");
+            return;
+        }
+
+        std::string sessionId = requestJson.get("session_id", "").asString();
+        std::string messageContent = requestJson.get("message", "").asString();
+
+        if(sessionId.empty() || messageContent.empty()) {
+            root["success"] = false;
+            root["message"] = "会话ID和消息内容不能为空";
+            Json::StreamWriterBuilder writer;
+            res.set_content(Json::writeString(writer, root), "application/json");
+            return;
+        }
+
+        auto session = _sessionManager->getSession(sessionId);
+        if(!session) {
+            root["success"] = false;
+            root["message"] = "会话不存在";
+            Json::StreamWriterBuilder writer;
+            res.set_content(Json::writeString(writer, root), "application/json");
+            return;
+        }
+
+        // 添加用户消息
+        Ai_Chat_SDK::Message userMsg("user", messageContent);
+        _sessionManager->addMessage(sessionId, userMsg);
+
+        // 获取历史消息
+        auto history = _sessionManager->getHistroyMessages(sessionId);
+
+        std::map<std::string, std::string> requestParam = {{"temperature", std::to_string(_config._temperature)},
+                                                           {"max_tokens", std::to_string(_config._maxTokens)}};
+
+        std::string fullResponse;
+
+        // 使用 set_content_provider 实现流式响应
+        res.set_content_provider("text/event-stream", [this, sessionId, session, history, requestParam, &fullResponse](size_t offset, httplib::DataSink& sink) {
+            // 流式回调：只累积内容，避免在 provider 里每次写 sink 可能引发生命周期/并发问题
+            auto callback = [&fullResponse](const std::string& content, bool isFinish) {
+                if(!content.empty()) {
+                    fullResponse += content;
+                }
+            };
+
+            // 调用LLM
+            std::string response = _llmManager->sendMessageStream(session->_modelName, history, requestParam, callback);
+
+            // 添加助手消息（后端会话持久化）
+            Ai_Chat_SDK::Message assistantMsg("assistant", fullResponse);
+            _sessionManager->addMessage(sessionId, assistantMsg);
+
+            // 将累积结果一次性写回 SSE 事件
+            if(!fullResponse.empty()) {
+                std::string sseData = "data: " + fullResponse + "\n\n";
+                sink.write(sseData.c_str(), sseData.size());
+            }
+
+            // 发送完成信号
+            std::string doneMsg = "data: [DONE]\n\n";
+            sink.write(doneMsg.c_str(), doneMsg.size());
+            sink.done();
+
+            return true;  // 返回 true 表示成功
+        });
     });
 
     // 前端页面
-    _server->Get("/", [this](const httplib::Request& req, httplib::Response& res) {
-        handleStaticFile(req, res);
-    });
+    _server->Get("/", [this](const httplib::Request& req, httplib::Response& res) { handleStaticFile(req, res); });
 
-    _server->Get("/index.html", [this](const httplib::Request& req, httplib::Response& res) {
-        handleStaticFile(req, res);
-    });
+    _server->Get("/index.html", [this](const httplib::Request& req, httplib::Response& res) { handleStaticFile(req, res); });
 
     // CSS文件
-    _server->Get("/css/style.css", [this](const httplib::Request& req, httplib::Response& res) {
-        handleStaticFile(req, res);
-    });
+    _server->Get("/css/style.css", [this](const httplib::Request& req, httplib::Response& res) { handleStaticFile(req, res); });
 
     // JS文件
-    _server->Get("/js/app.js", [this](const httplib::Request& req, httplib::Response& res) {
-        handleStaticFile(req, res);
-    });
+    _server->Get("/js/app.js", [this](const httplib::Request& req, httplib::Response& res) { handleStaticFile(req, res); });
 
     // 帮助信息
-    _server->Get("/help", [this](const httplib::Request& req, httplib::Response& res) {
-        handleHelp(req, res);
-    });
+    _server->Get("/help", [this](const httplib::Request& req, httplib::Response& res) { handleHelp(req, res); });
 
     // 404处理
-    _server->set_not_found_handler([](const httplib::Request& req, httplib::Response& res) {
+    _server->set_error_handler([](const httplib::Request& req, httplib::Response& res) {
         res.status = 404;
         res.set_content("{\"success\":false,\"message\":\"Not Found\"}", "application/json");
     });
@@ -210,7 +267,7 @@ void ChatServer::handleGetSessions(const httplib::Request& req, httplib::Respons
     Json::Value sessions;
     auto sessionList = getSessionInfoList();
 
-    for (const auto& info : sessionList) {
+    for(const auto& info : sessionList) {
         Json::Value session;
         session["id"] = info.id;
         session["model"] = info.model;
@@ -237,7 +294,7 @@ void ChatServer::handleGetModels(const httplib::Request& req, httplib::Response&
     Json::Value models;
     auto availableModels = getAvailableModels();
 
-    for (const auto& model : availableModels) {
+    for(const auto& model : availableModels) {
         Json::Value m;
         m["name"] = model._modelName;
         m["desc"] = model._modelDesc;
@@ -259,7 +316,7 @@ void ChatServer::handleCreateSession(const httplib::Request& req, httplib::Respo
     std::string errs;
 
     Json::Value requestJson;
-    if (!Json::parseFromStream(builder, stream, &requestJson, &errs)) {
+    if(!Json::parseFromStream(builder, stream, &requestJson, &errs)) {
         root["success"] = false;
         root["message"] = "请求参数解析失败";
         Json::StreamWriterBuilder writer;
@@ -268,7 +325,7 @@ void ChatServer::handleCreateSession(const httplib::Request& req, httplib::Respo
     }
 
     std::string modelName = requestJson.get("model", "").asString();
-    if (modelName.empty()) {
+    if(modelName.empty()) {
         root["success"] = false;
         root["message"] = "模型名称不能为空";
         Json::StreamWriterBuilder writer;
@@ -277,7 +334,7 @@ void ChatServer::handleCreateSession(const httplib::Request& req, httplib::Respo
     }
 
     // 验证模型是否可用
-    if (!_llmManager->isAvailable(modelName)) {
+    if(!_llmManager->isAvailable(modelName)) {
         root["success"] = false;
         root["message"] = "模型不可用: " + modelName;
         Json::StreamWriterBuilder writer;
@@ -305,7 +362,7 @@ void ChatServer::handleGetSessionHistory(const httplib::Request& req, httplib::R
     std::string sessionId = req.matches[1];
 
     auto session = _sessionManager->getSession(sessionId);
-    if (!session) {
+    if(!session) {
         Json::Value root;
         root["success"] = false;
         root["message"] = "会话不存在";
@@ -321,7 +378,7 @@ void ChatServer::handleGetSessionHistory(const httplib::Request& req, httplib::R
     root["message"] = "获取历史消息成功";
 
     Json::Value messages;
-    for (const auto& msg : history) {
+    for(const auto& msg : history) {
         Json::Value m;
         m["id"] = msg._messageId;
         m["role"] = msg._role;
@@ -344,7 +401,7 @@ void ChatServer::handleDeleteSession(const httplib::Request& req, httplib::Respo
     bool success = _sessionManager->deleteSession(sessionId);
 
     Json::Value root;
-    if (success) {
+    if(success) {
         root["success"] = true;
         root["message"] = "会话删除成功";
     } else {
@@ -354,74 +411,6 @@ void ChatServer::handleDeleteSession(const httplib::Request& req, httplib::Respo
 
     Json::StreamWriterBuilder writer;
     res.set_content(Json::writeString(writer, root), "application/json");
-}
-
-void ChatServer::handleSendMessageStream(const httplib::Request& req, httplib::Response& res) {
-    // 设置SSE响应头
-    res.set_header("Content-Type", "text/event-stream");
-    res.set_header("Cache-Control", "no-cache");
-    res.set_header("Connection", "keep-alive");
-    res.set_header("Access-Control-Allow-Origin", "*");
-
-    Json::CharReaderBuilder builder;
-    std::istringstream stream(req.body);
-    std::string errs;
-
-    Json::Value requestJson;
-    if (!Json::parseFromStream(builder, stream, &requestJson, &errs)) {
-        res.set_content("data: {\"error\":\"请求参数解析失败\"}\n\ndata: [DONE]\n\n", "text/event-stream");
-        return;
-    }
-
-    std::string sessionId = requestJson.get("session_id", "").asString();
-    std::string message = requestJson.get("message", "").asString();
-
-    if (sessionId.empty() || message.empty()) {
-        res.set_content("data: {\"error\":\"参数不完整\"}\n\ndata: [DONE]\n\n", "text/event-stream");
-        return;
-    }
-
-    // 获取会话
-    auto session = _sessionManager->getSession(sessionId);
-    if (!session) {
-        res.set_content("data: {\"error\":\"会话不存在\"}\n\ndata: [DONE]\n\n", "text/event-stream");
-        return;
-    }
-
-    // 添加用户消息
-    Ai_Chat_SDK::Message userMsg("user", message);
-    _sessionManager->addMessage(sessionId, userMsg);
-
-    // 获取历史消息
-    auto history = _sessionManager->getHistroyMessages(sessionId);
-
-    // 准备请求参数
-    std::map<std::string, std::string> requestParam;
-    requestParam["temperature"] = std::to_string(_config._temperature);
-    requestParam["max_tokens"] = std::to_string(_config._maxTokens);
-
-    // 存储完整响应
-    std::string fullResponse;
-
-    // 流式回调
-    auto callback = [&res, &fullResponse](const std::string& content, bool isFinish) {
-        fullResponse += content;
-        std::string sseData = "data: " + content + "\n\n";
-        res.write(sseData.c_str(), sseData.size());
-
-        // 刷新响应
-        res.flush();
-    };
-
-    // 调用LLM
-    std::string response = _llmManager->sendMessageStream(session->_modelName, history, requestParam, callback);
-
-    // 添加助手消息
-    Ai_Chat_SDK::Message assistantMsg("assistant", fullResponse);
-    _sessionManager->addMessage(sessionId, assistantMsg);
-
-    // 发送完成信号
-    res.write("data: [DONE]\n\n", 14);
 }
 
 void ChatServer::handleHelp(const httplib::Request& req, httplib::Response& res) {
@@ -471,7 +460,7 @@ void ChatServer::handleHelp(const httplib::Request& req, httplib::Response& res)
 
 void ChatServer::handleStaticFile(const httplib::Request& req, httplib::Response& res) {
     std::string path = req.path;
-    if (path == "/" || path == "/index.html") {
+    if(path == "/" || path == "/index.html") {
         path = "/index.html";
     }
 
@@ -479,7 +468,7 @@ void ChatServer::handleStaticFile(const httplib::Request& req, httplib::Response
 
     // 尝试读取文件
     std::ifstream file(filePath, std::ios::binary);
-    if (!file) {
+    if(!file) {
         res.status = 404;
         res.set_content("Not Found", "text/plain");
         return;
@@ -492,17 +481,17 @@ void ChatServer::handleStaticFile(const httplib::Request& req, httplib::Response
 
     // 设置Content-Type
     std::string contentType = "text/plain";
-    if (path.find(".html") != std::string::npos) {
+    if(path.find(".html") != std::string::npos) {
         contentType = "text/html";
-    } else if (path.find(".css") != std::string::npos) {
+    } else if(path.find(".css") != std::string::npos) {
         contentType = "text/css";
-    } else if (path.find(".js") != std::string::npos) {
+    } else if(path.find(".js") != std::string::npos) {
         contentType = "application/javascript";
-    } else if (path.find(".json") != std::string::npos) {
+    } else if(path.find(".json") != std::string::npos) {
         contentType = "application/json";
-    } else if (path.find(".png") != std::string::npos) {
+    } else if(path.find(".png") != std::string::npos) {
         contentType = "image/png";
-    } else if (path.find(".jpg") != std::string::npos || path.find(".jpeg") != std::string::npos) {
+    } else if(path.find(".jpg") != std::string::npos || path.find(".jpeg") != std::string::npos) {
         contentType = "image/jpeg";
     }
 
@@ -514,9 +503,9 @@ std::vector<SessionInfo> ChatServer::getSessionInfoList() const {
 
     auto sessionIds = _sessionManager->getSessionLists();
 
-    for (const auto& sessionId : sessionIds) {
+    for(const auto& sessionId : sessionIds) {
         auto session = _sessionManager->getSession(sessionId);
-        if (!session) continue;
+        if(!session) continue;
 
         SessionInfo info;
         info.id = session->_sessionId;
@@ -526,10 +515,10 @@ std::vector<SessionInfo> ChatServer::getSessionInfoList() const {
         info.message_count = static_cast<int>(session->_messages.size());
 
         // 获取第一条用户消息
-        for (const auto& msg : session->_messages) {
-            if (msg._role == "user") {
+        for(const auto& msg : session->_messages) {
+            if(msg._role == "user") {
                 info.first_user_message = msg._content;
-                if (info.first_user_message.length() > 50) {
+                if(info.first_user_message.length() > 50) {
                     info.first_user_message = info.first_user_message.substr(0, 50) + "...";
                 }
                 break;
@@ -542,40 +531,39 @@ std::vector<SessionInfo> ChatServer::getSessionInfoList() const {
     return result;
 }
 
-std::vector<Ai_Chat_SDK::LLMInfo> ChatServer::getAvailableModels() const {
-    return _llmManager->getAvailableModels();
-}
+std::vector<Ai_Chat_SDK::LLMInfo> ChatServer::getAvailableModels() const { return _llmManager->getAvailableModels(); }
 
 bool ChatServer::validateConfig() const {
     // 验证温度值
-    if (_config._temperature < 0.0 || _config._temperature > 2.0) {
-        ERROR("温度值必须在0.0-2.0之间，当前值: {}", _config._temperature);
+
+    if(_config._temperature < 0.0 || _config._temperature > 2.0) {
+        ERR("温度值必须在0.0-2.0之间，当前值: {}", _config._temperature);
         return false;
     }
 
     // 验证最大token数
-    if (_config._maxTokens <= 0) {
-        ERROR("最大token数必须大于0，当前值: {}", _config._maxTokens);
+    if(_config._maxTokens <= 0) {
+        ERR("最大token数必须大于0，当前值: {}", _config._maxTokens);
         return false;
     }
 
     // 验证至少有一个可用的模型配置
     bool hasValidModel = false;
 
-    if (!_config._deepseekApiKey.empty()) hasValidModel = true;
-    if (!_config._chatgptApiKey.empty()) hasValidModel = true;
-    if (!_config._geminiApiKey.empty()) hasValidModel = true;
-    if (!_config._ollamaEndpoint.empty() && !_config._ollamaModel.empty()) hasValidModel = true;
+    if(!_config._deepseekApiKey.empty()) hasValidModel = true;
+    if(!_config._chatgptApiKey.empty()) hasValidModel = true;
+    if(!_config._geminiApiKey.empty()) hasValidModel = true;
+    if(!_config._ollamaEndpoint.empty() && !_config._ollamaModel.empty()) hasValidModel = true;
 
-    if (!hasValidModel) {
-        ERROR("至少需要配置一个有效的模型API密钥或Ollama配置");
+    if(!hasValidModel) {
+        ERR("至少需要配置一个有效的模型API密钥或Ollama配置");
         return false;
     }
 
     // 验证Ollama配置（如果配置了ollama，则所有参数都不能为空）
-    if (!_config._ollamaEndpoint.empty() || !_config._ollamaModel.empty()) {
-        if (_config._ollamaEndpoint.empty() || _config._ollamaModel.empty()) {
-            ERROR("Ollama配置不完整，endpoint和model都不能为空");
+    if(!_config._ollamaEndpoint.empty() || !_config._ollamaModel.empty()) {
+        if(_config._ollamaEndpoint.empty() || _config._ollamaModel.empty()) {
+            ERR("Ollama配置不完整，endpoint和model都不能为空");
             return false;
         }
     }
@@ -584,13 +572,13 @@ bool ChatServer::validateConfig() const {
 }
 
 bool ChatServer::start() {
-    if (_running) {
+    if(_running) {
         WARN("服务器已经在运行");
         return false;
     }
 
-    if (!validateConfig()) {
-        ERROR("配置验证失败");
+    if(!validateConfig()) {
+        ERR("配置验证失败");
         return false;
     }
 
@@ -603,7 +591,7 @@ bool ChatServer::start() {
 #endif
     std::string exeDir = exePath;
     size_t pos = exeDir.find_last_of("/\\");
-    if (pos != std::string::npos) {
+    if(pos != std::string::npos) {
         exeDir = exeDir.substr(0, pos);
     }
     _webRoot = exeDir + PATH_SEPARATOR + "web";
@@ -619,13 +607,13 @@ bool ChatServer::start() {
 }
 
 void ChatServer::stop() {
-    if (!_running) {
+    if(!_running) {
         return;
     }
 
     _running = false;
 
-    if (_server) {
+    if(_server) {
         _server->stop();
     }
 
@@ -634,21 +622,21 @@ void ChatServer::stop() {
 
 bool parseConfigFile(const std::string& configFile, ServerConfig& config) {
     std::ifstream file(configFile);
-    if (!file) {
+    if(!file) {
         WARN("无法打开配置文件: {}", configFile);
         return false;
     }
 
     std::string line;
-    while (std::getline(file, line)) {
+    while(std::getline(file, line)) {
         // 跳过空行和注释
-        if (line.empty() || line[0] == '#' || line[0] == ';') {
+        if(line.empty() || line[0] == '#' || line[0] == ';') {
             continue;
         }
 
         // 解析 key=value 格式
         size_t pos = line.find('=');
-        if (pos == std::string::npos) {
+        if(pos == std::string::npos) {
             continue;
         }
 
@@ -661,25 +649,25 @@ bool parseConfigFile(const std::string& configFile, ServerConfig& config) {
         value.erase(0, value.find_first_not_of(" \t"));
         value.erase(value.find_last_not_of(" \t") + 1);
 
-        if (key == "server_addr") {
+        if(key == "server_addr") {
             config._serverAddr = value;
-        } else if (key == "server_port") {
+        } else if(key == "server_port") {
             config._serverPort = std::stoi(value);
-        } else if (key == "log_level") {
+        } else if(key == "log_level") {
             config._logLevel = value;
-        } else if (key == "temperature") {
+        } else if(key == "temperature") {
             config._temperature = std::stod(value);
-        } else if (key == "max_tokens") {
+        } else if(key == "max_tokens") {
             config._maxTokens = std::stoi(value);
-        } else if (key == "deepseek_api_key") {
+        } else if(key == "deepseek_api_key") {
             config._deepseekApiKey = value;
-        } else if (key == "chatgpt_api_key") {
+        } else if(key == "chatgpt_api_key") {
             config._chatgptApiKey = value;
-        } else if (key == "gemini_api_key") {
+        } else if(key == "gemini_api_key") {
             config._geminiApiKey = value;
-        } else if (key == "ollama_endpoint") {
+        } else if(key == "ollama_endpoint") {
             config._ollamaEndpoint = value;
-        } else if (key == "ollama_model") {
+        } else if(key == "ollama_model") {
             config._ollamaModel = value;
         }
     }
@@ -690,27 +678,27 @@ bool parseConfigFile(const std::string& configFile, ServerConfig& config) {
 void loadApiKeysFromEnv(ServerConfig& config) {
     // 从环境变量加载API密钥
     const char* envValue = std::getenv("DEEPSEEK_API_KEY");
-    if (envValue) {
+    if(envValue) {
         config._deepseekApiKey = envValue;
     }
 
     envValue = std::getenv("CHATGPT_API_KEY");
-    if (envValue) {
+    if(envValue) {
         config._chatgptApiKey = envValue;
     }
 
     envValue = std::getenv("GEMINI_API_KEY");
-    if (envValue) {
+    if(envValue) {
         config._geminiApiKey = envValue;
     }
 
     envValue = std::getenv("OLLAMA_ENDPOINT");
-    if (envValue) {
+    if(envValue) {
         config._ollamaEndpoint = envValue;
     }
 
     envValue = std::getenv("OLLAMA_MODEL");
-    if (envValue) {
+    if(envValue) {
         config._ollamaModel = envValue;
     }
 }
@@ -748,8 +736,6 @@ void printHelp(const char* progName) {
     std::cout << "  DELETE /api/session/{id}           删除会话\n";
 }
 
-void printVersion() {
-    std::cout << "AIChatServer 版本 1.0.0\n";
-}
+void printVersion() { std::cout << "AIChatServer 版本 1.0.0\n"; }
 
 }  // namespace Ai_Chat_Server

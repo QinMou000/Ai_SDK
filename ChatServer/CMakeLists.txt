@@ -17,7 +17,7 @@ endif()
 # ==============================================================================
 find_package(spdlog REQUIRED)
 find_package(fmt REQUIRED)
-find_package(GFlags REQUIRED)
+find_package(gflags REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # 查找httplib (header-only库)
@@ -106,7 +106,7 @@ if(WIN32)
 else()
     # Linux上使用pthread
     set(THREADS_LIBRARY pthread)
-    set(GFLAGS_LIBRARY GFlags::gflags)
+    set(GFLAGS_LIBRARY gflags)
 endif()
 
 target_link_libraries(AIChatServer PRIVATE
