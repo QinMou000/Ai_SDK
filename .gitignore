@@ -2,3 +2,5 @@
 *.db
 /ChatServer/build/
 /ChatServer/required/
+/.claude/
+/.ccpanes/
