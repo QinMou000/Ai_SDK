@@ -5,3 +5,9 @@ ColumnLimit: 160
 SpaceBeforeParens: Never
 DerivePointerAlignment: false
 PointerAlignment: Left
+ReferenceAlignment: Left
+Cpp11BracedListStyle: true
+AllowShortFunctionsOnASingleLine: Empty
+BreakBeforeBraces: Attach
+AlignOperands: true
+AlignArrayOfStructures: Left

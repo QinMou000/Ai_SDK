@@ -4,3 +4,11 @@
 /ChatServer/required/
 /.claude/
 /.ccpanes/
+CMakeUserPresets.json
+/build/
+
+# 环境变量文件，包含密钥、接口地址等敏感信息
+.env
+.env.*
+
+!.env.example

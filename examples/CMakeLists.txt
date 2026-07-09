@@ -1,0 +1,6 @@
+add_subdirectory(01_chat_deepseek)
+add_subdirectory(02_chat_minimax)
+add_subdirectory(03_stream_chat)
+add_subdirectory(04_register_tool)
+add_subdirectory(05_tool_call)
+add_subdirectory(06_simple_agent)

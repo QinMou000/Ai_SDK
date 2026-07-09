@@ -1,12 +1,13 @@
 {
     "cmake.ignoreCMakeListsMissing": true,
     "[cpp]": {
-        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+        "editor.defaultFormatter": "ms-vscode.cpptools"
     },
     "[c]": {
         "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
     },
     "C_Cpp.clang_format_style": "file",
     "clang-format.style": "file",
-    "editor.formatOnSave": true
+    "editor.formatOnSave": true,
+    "C_Cpp.errorSquiggles": "disabled"
 }
