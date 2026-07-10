@@ -1,0 +1,29 @@
+{
+  "id": "00-bootstrap-guidelines",
+  "name": "00-bootstrap-guidelines",
+  "title": "初始化项目开发规格",
+  "description": "为后续 AI 会话补齐当前仓库的真实开发规格与约束",
+  "status": "in_progress",
+  "dev_type": "docs",
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "wang-qin928",
+  "assignee": "wang-qin928",
+  "createdAt": "2026-07-10",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": null,
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    ".trellis/spec/backend/",
+    ".trellis/spec/guides/"
+  ],
+  "notes": "由 trellis init 创建的首次初始化任务；当前仓库是 C++ SDK，而非全栈项目",
+  "meta": {}
+}
