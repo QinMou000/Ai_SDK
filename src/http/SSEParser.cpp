@@ -21,7 +21,12 @@ std::string jsonStringOrEmpty(const nlohmann::json& json, const char* key) {
     return json.at(key).get<std::string>();
 }
 
+// LF：\n Unix/Linux/macOS 标准换行
+// CRLF：\r\n Windows 系统换行（回车 + 换行两个字符）
+// CR：\r 老式 Mac 换行，现在很少见
+
 // normalizeNewlines 把 CRLF 统一折叠为 LF，降低后续事件边界处理复杂度。
+// 把所有 \r\n、单独\r 全部替换成单纯的 \n
 std::string normalizeNewlines(std::string text) {
     std::string normalized;
     normalized.reserve(text.size());
@@ -126,8 +131,7 @@ std::vector<StreamEvent> parseEventBlock(const std::string& block) {
             }
         }
 
-        if(delta.contains("tool_calls") && delta.at("tool_calls").is_array() &&
-           !delta.at("tool_calls").empty()) {
+        if(delta.contains("tool_calls") && delta.at("tool_calls").is_array() && !delta.at("tool_calls").empty()) {
             events.push_back(StreamEvent{
                 StreamEventType::ToolCallDelta,
                 delta.at("tool_calls").dump(),
@@ -141,6 +145,7 @@ std::vector<StreamEvent> parseEventBlock(const std::string& block) {
 
 }  // namespace
 
+// processBufferedEvents 从累积缓冲区中提取完整 SSE 事件并回调给上层。
 std::vector<StreamEvent> SSEParser::parseChunk(const std::string& chunk) const {
     const std::string normalized = normalizeNewlines(chunk);
     std::vector<StreamEvent> events;
@@ -157,7 +162,7 @@ std::vector<StreamEvent> SSEParser::parseChunk(const std::string& chunk) const {
             break;
         }
 
-        begin = end + 2U;
+        begin = end + 2U; // unsigned int 2 to skip the \n\n separator
         while(begin < normalized.size() && normalized[begin] == '\n') {
             ++begin;
         }

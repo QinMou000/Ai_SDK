@@ -1,11 +1,10 @@
 #pragma once
 
 #include <functional>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 #include <unordered_map>
-
-#include <nlohmann/json.hpp>
 
 namespace aiSDK {
 
@@ -29,17 +28,11 @@ struct HttpResponse {
 class HttpClient {
    public:
     // postJson 发送普通 JSON POST 请求，并返回状态码与响应正文。
-    HttpResponse postJson(const std::string& url,
-                          const nlohmann::json& body,
-                          const HttpHeaders& headers,
-                          int timeout_ms) const;
+    HttpResponse postJson(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers, int timeout_ms) const;
 
     // postJsonStream 发送流式 JSON POST 请求。
     // callback 会按网络分块收到原始字节，完整协议解析由上层负责。
-    HttpResponse postJsonStream(const std::string& url,
-                                const nlohmann::json& body,
-                                const HttpHeaders& headers,
-                                int timeout_ms,
+    HttpResponse postJsonStream(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers, int timeout_ms,
                                 HttpStreamCallback callback) const;
 };
 

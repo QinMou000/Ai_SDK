@@ -248,10 +248,12 @@ ChatResponse parseChatResponse(const std::string& raw_response) {
 // processBufferedEvents 从累积缓冲区中提取完整 SSE 事件并回调给上层。
 void processBufferedEvents(std::string& buffer, const SSEParser& parser, const StreamCallback& callback) {
     while(true) {
+        // SSE 协议中，事件块之间的分隔符是两个连续换行符（\n\n 或 \r\n\r\n）。
         size_t boundary = buffer.find("\r\n\r\n");
         size_t delimiter_size = 4;
 
         const size_t lf_boundary = buffer.find("\n\n");
+        // 如果同时存在 \r\n\r\n 和 \n\n，优先使用最先出现的那个作为边界。
         if(boundary == std::string::npos || (lf_boundary != std::string::npos && lf_boundary < boundary)) {
             boundary = lf_boundary;
             delimiter_size = 2;
@@ -264,6 +266,7 @@ void processBufferedEvents(std::string& buffer, const SSEParser& parser, const S
         const std::string event_block = buffer.substr(0, boundary);
         buffer.erase(0, boundary + delimiter_size);
 
+        // 解析器只处理完整事件块，避免半包数据导致 JSON 解析失败。
         for(const auto& event : parser.parseChunk(event_block)) {
             callback(event);
         }
@@ -275,8 +278,8 @@ void processBufferedEvents(std::string& buffer, const SSEParser& parser, const S
 DeepSeekProvider::DeepSeekProvider(ProviderConfig config, int timeout_ms) : config_(std::move(config)), timeout_ms_(timeout_ms) {}
 
 ChatResponse DeepSeekProvider::chat(const ChatRequest& request) {
-    const std::string url = buildChatUrl(config_);
-    const nlohmann::json request_json = buildRequestJson(config_, request, false);
+    const std::string url = buildChatUrl(config_);                                  // 统一构造 Chat Completions 终端地址
+    const nlohmann::json request_json = buildRequestJson(config_, request, false);  // 统一生成 DeepSeek 请求体，避免 chat / stream 两处手工维护字段
 
     const HttpResponse response = http_client_.postJson(url, request_json, buildHeaders(config_), timeout_ms_);
     ensureSuccessStatus(response, url);
@@ -290,7 +293,7 @@ void DeepSeekProvider::streamChat(const ChatRequest& request, StreamCallback cal
 
     const std::string url = buildChatUrl(config_);
     const nlohmann::json request_json = buildRequestJson(config_, request, true);
-    std::string pending_buffer;
+    std::string pending_buffer; // 累积网络分块，直到遇到完整 SSE 事件块才交给解析器处理
 
     const HttpResponse response = http_client_.postJsonStream(url, request_json, buildHeaders(config_), timeout_ms_, [&](std::string_view chunk) {
         pending_buffer.append(chunk);
