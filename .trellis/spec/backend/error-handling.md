@@ -10,6 +10,7 @@
 - 非 2xx 服务端响应
 - SSE 数据块解析失败
 - 流式回调内部抛错
+- 工具注册参数非法、未知工具和本地处理函数异常
 
 ## 现有错误模型
 
@@ -32,6 +33,10 @@
   - 缺失 API Key、HTTP 非成功状态、响应体缺字段或格式错误时抛 `std::runtime_error`
 - `src/http/SSEParser.cpp`
   - SSE `data:` 不是合法 JSON，或上游返回错误对象时转成错误事件，而不是直接抛异常
+- `src/tool/ToolRegistry.cpp`
+  - 注册定义非法时抛 `std::invalid_argument`
+  - 查询不存在的定义时抛 `std::out_of_range`
+  - 执行未知工具或处理函数抛异常时返回失败 `ToolResult`，保证同批其他调用继续执行
 
 ## 当前约定
 
@@ -55,6 +60,12 @@
 - `SSEParser` 当前返回 `SSEEvent`，其中错误通过 `SSEEventType::Error` 表达。
 - `DeepSeekProvider::streamChat` 负责把错误事件转交回调；不要在解析器里过早混入网络重试或 UI 文案。
 
+### 5. 工具定义错误抛异常，工具执行错误返回结果
+
+- `registerTool` 的空名称、空处理函数或非对象参数 Schema 属于调用方定义错误，抛 `std::invalid_argument`。
+- `getTool` 用于显式查询，不存在时抛 `std::out_of_range`。
+- `execute` 的工具名称来自模型运行期输出；未知工具或本地处理函数异常必须转换为 `ToolResult::errorResult(...)`，不能中止同一批后续 Tool Call。
+
 ## 验证与错误矩阵
 
 | 触发条件 | 当前行为 | 参考文件 |
@@ -68,6 +79,10 @@
 | 非 2xx 且返回可解析错误体 | 抛 `std::runtime_error`，优先拼接远端错误信息 | `src/provider/DeepSeekProvider.cpp` |
 | SSE `data:` 非法 JSON | 生成 `Error` 事件 | `src/http/SSEParser.cpp` |
 | 流式回调内部抛错 | `HttpClient` 缓存异常并在请求返回后重新抛出 | `src/http/HttpClient.cpp` |
+| 注册工具名称为空、处理函数为空或 Schema 顶层非对象 | 抛 `std::invalid_argument` | `src/tool/ToolRegistry.cpp` |
+| `getTool` 查询未知名称 | 抛 `std::out_of_range` | `src/tool/ToolRegistry.cpp` |
+| 执行未知工具 | 返回失败 `ToolResult`，错误含工具名 | `src/tool/ToolRegistry.cpp` |
+| 工具处理函数抛异常 | 返回失败 `ToolResult`，错误含工具名和异常原因 | `src/tool/ToolRegistry.cpp` |
 
 ## 新代码应遵循的模式
 

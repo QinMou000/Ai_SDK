@@ -155,3 +155,80 @@
 #### 正确写法
 
 - 先在 Provider 层维护 `pending_buffer`，只对完整事件调用解析器。
+
+## 场景四：Tool Call 注册与单批执行契约
+
+### 1. 作用范围 / 触发条件
+
+- 触发：修改 `Tool`、`ToolRegistry`、`ToolExecutor`、`ToolExecutionResult` 或 `AIClient` 的工具公开入口。
+- 目标：让 SDK 提供可组合的模型工具能力，同时防止工具执行接口隐式演变成 Agent Loop。
+
+### 2. 关键签名
+
+- `void ToolRegistry::registerTool(const Tool& tool, ToolHandler handler)`
+- `std::vector<Tool> ToolRegistry::listTools() const`
+- `ToolResult ToolRegistry::execute(const std::string& name, const nlohmann::json& arguments)`
+- `std::vector<ToolExecutionResult> ToolExecutor::executeAll(const std::vector<ToolCall>& calls)`
+- `std::vector<ToolExecutionResult> AIClient::executeToolCalls(const std::vector<ToolCall>& calls)`
+- `Message ToolExecutionResult::toToolMessage() const`
+
+### 3. 契约
+
+- `Tool::name` 必须非空，`ToolHandler` 必须可调用，`Tool::parameters` 顶层必须是 JSON 对象。
+- 同名 `registerTool` 替换最新定义和处理函数，但 `listTools()` 保持首次注册顺序且不产生重复项。
+- `ChatRequest::tools` 由调用方显式赋值，例如 `request.tools = client.tools().listTools()`；注册工具不会隐式修改请求。
+- `executeToolCalls()` 只同步、串行执行传入的一批 `ToolCall`，返回数量和顺序与输入一致。
+- `ToolExecutionResult::toToolMessage()` 使用原 `call.id` 生成 `tool_call_id`；成功内容是 `result.data.dump()`，失败内容是 `result.error_message`。
+- `AIClient` 不追加消息历史、不自动再次调用 `chat()`、不判断是否继续循环；这些决策属于上层应用或 Agent。
+- `ToolRegistry` 当前不提供内部同步，并发注册或执行必须由调用方互斥。
+
+### 4. 校验与错误矩阵
+
+| 条件 | 行为 |
+| --- | --- |
+| 工具名称为空 | `registerTool` 抛 `std::invalid_argument` |
+| 处理函数为空 | `registerTool` 抛 `std::invalid_argument`，消息含工具名 |
+| `parameters` 顶层不是对象 | `registerTool` 抛 `std::invalid_argument`，消息含工具名 |
+| `getTool` 查询未知名称 | 抛 `std::out_of_range` |
+| `execute` 收到未知名称 | 返回 `success == false` 的 `ToolResult`，不抛异常 |
+| 工具处理函数抛标准异常 | 返回失败 `ToolResult`，消息含工具名和 `what()` |
+| 单批中某个工具失败 | 保留该位置的失败结果，继续执行后续调用 |
+| `executeToolCalls({})` | 返回空结果，不发起网络请求 |
+
+### 5. Good / Base / Bad
+
+- Good：调用方注册工具，把 `listTools()` 显式放入请求；收到响应后调用 `executeToolCalls(response.tool_calls)`，再自行决定是否调用 `toToolMessage()` 和下一次 `chat()`。
+- Base：只注册并离线执行本地工具，不提供 API Key，也能通过 `AIClient::executeToolCalls()` 得到结果。
+- Bad：在 `AIClient::executeToolCalls()` 内自动追加 assistant/tool 消息并循环调用 Provider，导致 SDK 隐式承担 Agent 决策职责。
+
+### 6. 必要测试
+
+- `tests/tool/tool_registry_test.cpp`：断言注册顺序、同名替换、非法定义、未知工具和处理函数异常。
+- `tests/tool/tool_executor_test.cpp`：断言批量结果数量与顺序、单个失败后继续执行、成功和失败消息都绑定原 `tool_call_id`。
+- `tests/smoke/ai_sdk_smoke_test.cpp`：断言 `AIClient::executeToolCalls()` 无 API Key 时仍能离线执行，且不会触发网络请求。
+- `examples/04_register_tool`：离线验证注册、列举和单批执行。
+- `examples/05_tool_call`：联机验证 DeepSeek 返回 Tool Call、SDK 执行工具、示例应用显式发起一次补充请求。
+
+### 7. 错误写法 vs 正确写法
+
+#### 错误写法
+
+```cpp
+// 错误：SDK 门面隐藏循环、历史修改和是否继续的决策。
+ChatResponse AIClient::chatWithTools(ChatRequest request) {
+    while(true) {
+        // 隐式调用模型并执行工具……
+    }
+}
+```
+
+#### 正确写法
+
+```cpp
+request.tools = client.tools().listTools();
+const ChatResponse response = client.chat(request);
+const std::vector<ToolExecutionResult> results =
+    client.executeToolCalls(response.tool_calls);
+
+// 是否转换结果消息并发起下一次 chat，由上层调用方显式决定。
+```

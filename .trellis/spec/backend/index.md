@@ -17,12 +17,14 @@
 - SDK 公开入口是 `include/AIClient.h` 与 `src/AIClient.cpp`。
 - 模型能力通过 `include/provider/IModelProvider.h` 抽象，目前唯一落地实现是 `src/provider/DeepSeekProvider.cpp`。
 - HTTP 与流式解析由 `src/http/HttpClient.cpp`、`src/http/SSEParser.cpp` 承担。
+- Tool Call 本地执行由 `include/tool/`、`src/tool/` 和 `AIClient::executeToolCalls(...)` 承担。
 - 配置、消息、请求、响应模型位于 `include/core/` 与 `src/core/`。
 
 ## 开发前检查
 
 - 先读 [目录结构规范](./directory-structure.md)，确认改动应该落在 `include/`、`src/`、`tests/` 还是 `examples/`。
 - 如果改动触及 `AIClient`、Provider、HTTP/SSE 之间的数据边界，必须同时读 [SDK 契约](./sdk-contracts.md) 和 [错误处理](./error-handling.md)。
+- 如果改动触及工具注册、Tool Call 批量执行或结果消息转换，也必须同时读 [SDK 契约](./sdk-contracts.md) 和 [错误处理](./error-handling.md)。
 - 如果改动涉及调试、诊断或日志输出，先读 [日志规范](./logging-guidelines.md)。
 - 如果改动引入持久化、缓存或外部存储能力，先读 [数据库与持久化规范](./database-guidelines.md)。
 

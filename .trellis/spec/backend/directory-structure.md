@@ -9,10 +9,12 @@
 - `include/core/`：对外可见的数据模型与配置类型，例如 `Config`、`Message`、`ChatRequest`、`ChatResponse`。
 - `include/provider/`：Provider 抽象和实现声明，例如 `IModelProvider`、`DeepSeekProvider`。
 - `include/http/`：HTTP 与 SSE 的公开接口；这里可以暴露 SDK 自己的抽象，但不要暴露 `cpr` 细节。
-- `include/tool/`、`include/trace/`、`include/agent/`：目前只有头文件定义或预留抽象，没有对应 `src/` 实现。
+- `include/tool/`：公开的工具定义、注册表、Tool Call 和批量执行接口；对应实现位于 `src/tool/`。
+- `include/trace/`、`include/agent/`：目前只有头文件定义或预留抽象，没有对应 `src/` 实现。
 - `src/core/`：与 `include/core/` 一一对应的实现。
 - `src/provider/`：模型供应商实现，目前只有 `DeepSeekProvider.cpp`。
 - `src/http/`：HTTP 传输与 SSE 解析实现。
+- `src/tool/`：工具结果构造、注册校验、异常收敛、稳定列举与串行批量执行。
 - `src/AIClient.cpp`：SDK 门面，负责 Provider 选择、工具注册入口与对外聊天接口。
 - `examples/`：按场景拆分的示例入口，展示真实调用方式而不是测试替身。
 - `tests/`：GTest 测试；当前分为 `core`、`provider`、`http`、`tool`、`smoke`。
@@ -48,7 +50,7 @@
 
 ## 当前未落地但已预留的目录
 
-- `include/tool/ToolRegistry.h` 已经提供头文件实现，但 `tests/tool/` 还没有实际测试目标。
+- `include/tool/` 已有对应 `src/tool/` 实现和 `tests/tool/ai_sdk_tool_test`；后续扩展必须继续保持公开声明、实现和测试分层一致。
 - `include/agent/`、`include/trace/` 目前没有 `src/` 实现，新增能力前先确认是否真的需要落地，而不是沿着预留目录盲目扩展。
 
 ## 常见错误
