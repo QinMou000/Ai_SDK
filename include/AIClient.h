@@ -2,12 +2,14 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "core/ChatRequest.h"
 #include "core/ChatResponse.h"
 #include "core/Config.h"
 #include "http/SSEParser.h"
 #include "provider/IModelProvider.h"
+#include "tool/ToolExecutor.h"
 #include "tool/ToolRegistry.h"
 
 namespace aiSDK {
@@ -31,6 +33,12 @@ class AIClient {
     // tools 暴露本地工具注册表，供后续 ToolCall 链路复用。
     ToolRegistry& tools();
     const ToolRegistry& tools() const;
+
+    // executeToolCalls 只执行调用方显式传入的一批工具调用。
+    // calls 必须来自调用方选定的模型响应；返回值与输入顺序一一对应。
+    // 未知工具或处理函数异常会收敛到 ToolExecutionResult::result，
+    // 不会修改消息历史，也不会自动发起下一轮模型请求。
+    std::vector<ToolExecutionResult> executeToolCalls(const std::vector<ToolCall>& calls);
 
     // setProvider 切换当前激活的 Provider，并立即绑定对应实现。
     void setProvider(const std::string& provider_name);

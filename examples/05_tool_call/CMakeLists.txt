@@ -1,2 +1,14 @@
-# 第一阶段先占位目录入口，
-# 真正的 ToolCall 示例会在协议解析实现后补充。
+add_executable(example_tool_call
+    main.cpp
+)
+
+target_link_libraries(example_tool_call
+    PRIVATE
+        ai_sdk
+)
+
+if(MSVC)
+    target_compile_options(example_tool_call PRIVATE /W4 /utf-8)
+else()
+    target_compile_options(example_tool_call PRIVATE -Wall -Wextra -Wpedantic)
+endif()

@@ -21,6 +21,9 @@ add_library(ai_sdk
     src/provider/DeepSeekProvider.cpp
     src/http/HttpClient.cpp
     src/http/SSEParser.cpp
+    src/tool/Tool.cpp
+    src/tool/ToolRegistry.cpp
+    src/tool/ToolExecutor.cpp
     src/AIClient.cpp
 )
 

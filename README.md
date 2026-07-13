@@ -9,6 +9,8 @@
 * `include/`、`src/`、`examples/`、`tests/` 的模块化骨架
 * `DeepSeekProvider` 的真实 `chat` / `streamChat` 请求链路
 * 基于 `.env`、环境变量和 JSON 配置占位符的本地配置读取
+* 本地 C++ 工具注册、稳定列举、串行执行与异常收敛
+* 由 `AIClient::executeToolCalls(...)` 暴露的显式单批 Tool Call 执行接口
 
 ## 目录结构
 
@@ -149,6 +151,7 @@ cmake --build --preset local-windows-bootstrap -v
 
 * `examples/01_chat_deepseek`
 * `examples/03_stream_chat`
+* `examples/05_tool_call`
 * `loadConfigFromFile(...)`
 
 这几个入口都会从当前目录向上查找最近的 `.env` 文件。也就是说：
@@ -202,6 +205,42 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 
 该示例会实时输出模型返回的增量文本。
 
+### 离线工具注册示例
+
+该示例不需要 API Key，用于验证工具定义、注册表和本地执行入口：
+
+```powershell
+.\build\windows-debug\examples\04_register_tool\example_register_tool.exe
+```
+
+### Tool Call 示例
+
+配置 `DEEPSEEK_API_KEY` 后，可以运行真实 DeepSeek Tool Call 示例：
+
+```powershell
+.\build\windows-debug\examples\05_tool_call\example_tool_call.exe "请查询当前本地时间"
+```
+
+SDK 只负责模型协议适配和调用方显式指定的本地工具执行，不会自动形成 Agent Loop。基本调用关系如下：
+
+```cpp
+AIClient client(config);
+
+client.tools().registerTool(tool, handler);
+
+ChatRequest request;
+request.messages.push_back(UserMessage("请查询当前本地时间"));
+request.tools = client.tools().listTools();
+
+ChatResponse response = client.chat(request);
+std::vector<ToolExecutionResult> results =
+    client.executeToolCalls(response.tool_calls);
+
+// 是否追加 assistant/tool 消息并再次调用 chat，由上层应用决定。
+```
+
+`executeToolCalls(...)` 保持模型返回顺序。未知工具或本地处理函数异常会转换为失败的 `ToolResult`，不会阻断同一批中的其他工具调用。
+
 ## 测试方式
 
 ### 全量测试
@@ -225,6 +264,8 @@ ctest --preset local-windows-debug --output-on-failure
 * `tests/smoke/ai_sdk_smoke_test.cpp`
 * `tests/core/ai_sdk_core_test`
 * `tests/provider/ai_sdk_provider_test`
+* `tests/tool/ai_sdk_tool_test`
+* `tests/http/ai_sdk_http_test`
 
 ## 本地环境说明
 
@@ -249,11 +290,13 @@ ctest --preset local-windows-debug --output-on-failure
 * 模块化的 `include/...` 头文件结构
 * DeepSeek 真实 API 的普通请求与流式请求
 * 基于 `.env` 和环境变量的本地配置读取
+* Tool Schema 请求序列化、Tool Call 响应解析
+* 本地工具注册、单批串行执行和 Tool 结果消息转换
 * 可本地执行的核心测试与在线 Provider 测试入口
 
 下一步的实现重点会是：
 
+* 更完整的工具参数 Schema 校验
+* 流式 Tool Call 增量聚合
 * `MiniMaxProvider`
-* `tool_calls` 的真实闭环
 * `trace` 可观测链路
-* 更多 `tool` / `agent` 示例

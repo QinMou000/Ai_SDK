@@ -1,2 +1,14 @@
-# 第一阶段先占位目录入口，
-# 真正的工具注册示例会在 ToolRegistry 落地后补充。
+add_executable(example_register_tool
+    main.cpp
+)
+
+target_link_libraries(example_register_tool
+    PRIVATE
+        ai_sdk
+)
+
+if(MSVC)
+    target_compile_options(example_register_tool PRIVATE /W4 /utf-8)
+else()
+    target_compile_options(example_register_tool PRIVATE -Wall -Wextra -Wpedantic)
+endif()
