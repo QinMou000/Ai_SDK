@@ -109,25 +109,42 @@ ai_sdk/
 方式 A：先加载开发者环境，再使用本地预设
 
 ```cmd
+REM 加载 64 位 MSVC 编译工具链，使当前终端可以使用 cl.exe 等构建工具。
 call D:\software\VS\Community\VC\Auxiliary\Build\vcvars64.bat
+
+REM 使用本机的 Debug 预设检查依赖并生成 Ninja 构建文件。
 cmake --preset local-windows-debug
+
+REM 按 Debug 预设编译核心库、示例和测试，并输出完整构建命令。
 cmake --build --preset local-windows-debug -v
-ctest --preset local-windows-debug
+
+REM 运行 Debug 预设对应的全部测试，并在失败时显示详细输出。
+ctest --preset local-windows-debug --output-on-failure
 ```
 
 方式 B：一次性执行
 
 ```cmd
+REM 加载 64 位 MSVC 工具链，然后配置 Debug 构建目录。
 call D:\software\VS\Community\VC\Auxiliary\Build\vcvars64.bat && cmake --preset local-windows-debug
+
+REM 加载 64 位 MSVC 工具链，然后编译 Debug 目标并输出完整构建命令。
 call D:\software\VS\Community\VC\Auxiliary\Build\vcvars64.bat && cmake --build --preset local-windows-debug -v
-call D:\software\VS\Community\VC\Auxiliary\Build\vcvars64.bat && ctest --preset local-windows-debug
+
+REM 加载 64 位 MSVC 工具链，然后运行全部测试并显示失败详情。
+call D:\software\VS\Community\VC\Auxiliary\Build\vcvars64.bat && ctest --preset local-windows-debug --output-on-failure
 ```
 
-### Release 构建
+### Windows Release 构建
 
 ```cmd
+REM 加载 64 位 MSVC 编译工具链。
 call D:\software\VS\Community\VC\Auxiliary\Build\vcvars64.bat
+
+REM 使用本机的 Release 预设检查依赖并生成优化构建文件。
 cmake --preset local-windows-release
+
+REM 按 Release 预设编译核心库和示例，并输出完整构建命令。
 cmake --build --preset local-windows-release -v
 ```
 
@@ -136,12 +153,53 @@ cmake --build --preset local-windows-release -v
 如果只想验证核心库和依赖是否能正确配置，可以使用 bootstrap 预设：
 
 ```cmd
+REM 加载 64 位 MSVC 编译工具链。
 call D:\software\VS\Community\VC\Auxiliary\Build\vcvars64.bat
+
+REM 配置仅包含核心库的 bootstrap 构建目录，不启用示例和测试。
 cmake --preset local-windows-bootstrap
+
+REM 编译 bootstrap 目标，快速验证工具链、依赖和核心库入口。
 cmake --build --preset local-windows-bootstrap -v
 ```
 
 这个预设会关闭 `examples` 和 `tests`，只验证核心库入口，适合排查工具链问题。
+
+### Linux 本地编译
+
+Linux 使用仓库共享的 `linux-debug` 和 `linux-release` 预设，不使用 Windows 专属的 `local-windows-*` 预设。开始构建前，请确保已经安装支持 C++17 的 GCC 或 Clang、CMake 3.23 及以上版本、Ninja、Git 和 vcpkg。
+
+以下示例假设 vcpkg 安装在 `$HOME/vcpkg`。如果实际安装位置不同，请替换为对应的绝对路径。
+
+#### Linux Debug 构建与测试
+
+```bash
+# 设置 vcpkg 根目录，供 CMake 预设定位 vcpkg 工具链文件。
+export VCPKG_ROOT="$HOME/vcpkg"
+
+# 使用共享的 Linux Debug 预设检查依赖并生成 Ninja 构建文件。
+cmake --preset linux-debug
+
+# 按 Linux Debug 预设编译核心库、示例和测试，并输出完整构建命令。
+cmake --build --preset linux-debug -v
+
+# 运行 Linux Debug 预设对应的全部测试，并在失败时显示详细输出。
+ctest --preset linux-debug --output-on-failure
+```
+
+#### Linux Release 构建
+
+在同一个已经设置 `VCPKG_ROOT` 的终端中执行：
+
+```bash
+# 使用共享的 Linux Release 预设检查依赖并生成优化构建文件。
+cmake --preset linux-release
+
+# 按 Linux Release 预设编译核心库和示例，并输出完整构建命令。
+cmake --build --preset linux-release -v
+```
+
+当前仓库没有 Linux bootstrap 预设；如果只需要快速验证 Linux 核心库，应先在 `CMakePresets.json` 中补充对应预设，而不是复用 Windows 专属预设。
 
 ## `.env` 配置方式
 
