@@ -145,7 +145,7 @@ std::vector<StreamEvent> parseEventBlock(const std::string& block) {
 
 }  // namespace
 
-// processBufferedEvents 从累积缓冲区中提取完整 SSE 事件并回调给上层。
+// parseChunk 把一个或多个完整 SSE 事件块转换为统一事件列表。
 std::vector<StreamEvent> SSEParser::parseChunk(const std::string& chunk) const {
     const std::string normalized = normalizeNewlines(chunk);
     std::vector<StreamEvent> events;
@@ -162,7 +162,7 @@ std::vector<StreamEvent> SSEParser::parseChunk(const std::string& chunk) const {
             break;
         }
 
-        begin = end + 2U; // unsigned int 2 to skip the \n\n separator
+        begin = end + 2U;  // 跳过作为事件分隔符的两个换行符。
         while(begin < normalized.size() && normalized[begin] == '\n') {
             ++begin;
         }
