@@ -11,6 +11,7 @@
 * 基于 `.env`、环境变量和 JSON 配置占位符的本地配置读取
 * 本地 C++ 工具注册、稳定列举、串行执行与异常收敛
 * 由 `AIClient::executeToolCalls(...)` 暴露的显式单批 Tool Call 执行接口
+* 显式 `TraceSession`、线程安全步骤快照、默认安全元数据与 JSON 导出
 
 ## 目录结构
 
@@ -51,6 +52,7 @@ ai_sdk/
     04_register_tool/
     05_tool_call/
     06_simple_agent/
+    07_trace/
 
   tests/
     smoke/
@@ -58,6 +60,7 @@ ai_sdk/
     provider/
     tool/
     http/
+    trace/
 ```
 
 ## 依赖要求
@@ -239,7 +242,8 @@ DEEPSEEK_MODEL=deepseek-v4-flash
     }
   },
   "default_provider": "deepseek",
-  "timeout_ms": 30000
+  "timeout_ms": 30000,
+  "enable_trace": true
 }
 ```
 
@@ -299,6 +303,85 @@ std::vector<ToolExecutionResult> results =
 
 `executeToolCalls(...)` 保持模型返回顺序。未知工具或本地处理函数异常会转换为失败的 `ToolResult`，不会阻断同一批中的其他工具调用。
 
+### Trace 链路追踪
+
+Trace 默认关闭。开启 `Config::enable_trace` 后，调用方通过 `startTrace()` 创建显式会话，并把同一个会话传给需要关联的模型请求、工具执行和后续模型请求：
+
+```cpp
+Config config;
+config.enable_trace = true;
+AIClient client(config);
+
+TraceSession trace = client.startTrace();
+
+ChatResponse first = client.chat(request, trace);
+std::vector<ToolExecutionResult> results =
+    client.executeToolCalls(first.tool_calls, trace);
+
+// 是否补充消息并再次请求仍由上层应用显式决定。
+ChatResponse final = client.chat(request, trace);
+
+Trace snapshot = trace.snapshot();
+nlohmann::json trace_json = trace.toJson();
+```
+
+每个公开操作都是同一 `trace_id` 下的新根步骤；Provider、HTTP、SSE 和单个工具步骤通过明确的 `parent_step_id` 形成内部层级。SDK 不会根据“上一次操作”推断父节点，也不会隐式形成 Agent Loop。
+
+默认 Trace 只保存 Provider、Model、步骤类型、状态、HTTP 状态码、耗时、SSE 与工具增量数量、工具名称及成功计数等元数据。它不会自动保存以下内容：
+
+* API Key 或完整 `Authorization` 头
+* URL、用户消息、完整请求体或响应正文
+* SSE 文本增量、工具参数、工具结果或底层异常原文
+
+确需业务详情时，可以提供返回 JSON 对象的脱敏器。`TraceDetailContext::kind` 表示原始输入类别，`operation_name` 表示当前操作名称：模型请求与响应使用 Provider 名称，工具参数与结果使用工具名称。只有脱敏器返回的顶层对象会写入 `details`：
+
+```cpp
+TraceOptions options;
+options.detail_sanitizer = [](const TraceDetailContext& context, const nlohmann::json& raw) {
+    if(context.kind == TraceDetailKind::ToolArguments &&
+       context.operation_name == "get_current_time") {
+        return nlohmann::json{{"field_count", raw.size()}};
+    }
+    return nlohmann::json{{"recorded", true}};
+};
+
+TraceSession trace = client.startTrace(options);
+```
+
+每个已处理的详情槽位都固定为 `{"status": ..., "value": {...}}`。脱敏器正常返回对象时状态为 `recorded`；返回数组、标量或 `null` 时状态为 `rejected`；抛出异常时状态为 `sanitizer_failed`。后两种状态的 `value` 都是空对象，且不会保存异常文本或原始值。例如：
+
+```json
+{
+  "details": {
+    "arguments": {
+      "status": "recorded",
+      "value": {
+        "field_count": 2
+      }
+    }
+  }
+}
+```
+
+脱敏器会接收四类原始输入，调用方必须按类别建立自己的字段白名单：
+
+* `ModelRequest`：`chatRequestToJson(request)` 的完整对象，可能包含消息、工具定义和模型参数。
+* `ModelResponse`：`chatResponseToJson(response)` 的完整对象，可能包含正文、工具调用、用量和 `raw_response`。
+* `ToolArguments`：解析后的 `ToolCall::arguments` 对象，不传入 `raw_arguments`。
+* `ToolResult`：成功时为 `{"success": true, "data": ...}`，失败时为 `{"success": false, "error_message": ...}`。
+
+Trace JSON 的每个步骤都固定包含 `error_code` 和 `error_summary`。成功步骤的 `error_code` 为 `none`；失败步骤使用 SDK 固定枚举映射，禁止写入任意错误码或底层异常原文。
+
+`TraceSession` 可复制，副本共享同一线程安全状态；并发追加、读取快照和 JSON 导出不会丢步骤，输出按步骤开始序号排序。自定义脱敏器自身的并发安全由调用方保证。`ToolRegistry` 仍不是线程安全容器，不能因为 Trace 会话线程安全而省略工具注册表的外部互斥。
+
+离线示例不需要 API Key：
+
+```powershell
+.\build\windows-debug\examples\07_trace\example_trace.exe
+```
+
+迁移说明：早期预留的 `TraceRecorder(Trace)`、`addStep(...)` 和返回内部引用的 `snapshot()` 已移除。新代码应从 `AIClient::startTrace()` 获取会话，通过带 `TraceSession&` 的公开重载记录链路，并使用 `TraceSession::snapshot()` 按值读取稳定快照。
+
 ## 测试方式
 
 ### 全量测试
@@ -324,6 +407,7 @@ ctest --preset local-windows-debug --output-on-failure
 * `tests/provider/ai_sdk_provider_test`
 * `tests/tool/ai_sdk_tool_test`
 * `tests/http/ai_sdk_http_test`
+* `tests/trace/ai_sdk_trace_test`
 
 ## 本地环境说明
 
@@ -350,6 +434,7 @@ ctest --preset local-windows-debug --output-on-failure
 * 基于 `.env` 和环境变量的本地配置读取
 * Tool Schema 请求序列化、Tool Call 响应解析
 * 本地工具注册、单批串行执行和 Tool 结果消息转换
+* 显式、线程安全、默认脱敏的内存 Trace 与 JSON 导出
 * 可本地执行的核心测试与在线 Provider 测试入口
 
 下一步的实现重点会是：
@@ -357,4 +442,4 @@ ctest --preset local-windows-debug --output-on-failure
 * 更完整的工具参数 Schema 校验
 * 流式 Tool Call 增量聚合
 * `MiniMaxProvider`
-* `trace` 可观测链路
+* Trace 持久化与 OpenTelemetry 适配（当前 Trace 只存在于内存中，支持 snapshot() 和 toJson()；进程退出后数据就消失，也不会发送给外部监控系统。）

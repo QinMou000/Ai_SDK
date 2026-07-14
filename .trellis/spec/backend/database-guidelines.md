@@ -4,9 +4,9 @@
 
 截至当前代码状态，仓库里没有数据库层、ORM、迁移脚本、缓存存储或本地持久化模块：
 
-- `CMakeLists.txt` 只链接 `cpr`、`nlohmann_json`、`spdlog`。
+- `CMakeLists.txt` 只链接 `cpr`、`nlohmann_json`、`spdlog` 和平台线程目标，不包含持久化依赖。
 - `src/` 中没有 `db`、`storage`、`repository`、`cache` 之类目录。
-- 已有配置 `Config` 只覆盖 Provider、超时、日志开关和环境变量装载。
+- 已有配置 `Config` 只覆盖 Provider、超时、Trace 开关和环境变量装载。
 
 因此，这份规范的核心不是“怎么写查询”，而是“在当前无持久化架构下，不要把临时存储逻辑偷偷混进现有层”。
 
@@ -26,7 +26,7 @@
 ### 3. 将来真的引入持久化时，必须新增独立边界
 
 - 首选新建专门目录，例如 `include/storage/`、`src/storage/` 或更明确的职责层。
-- 在 `Config` 中新增显式配置字段，而不是复用现有 `providers` 或 `trace` 字段偷塞连接串。
+- 在 `Config` 中新增显式配置字段，而不是复用现有 `providers` 或 `enable_trace` 字段偷塞连接串。
 - 同步补充测试目录与规格文档，不允许只写实现不写契约。
 
 ## 未来引入持久化时至少要补齐的内容

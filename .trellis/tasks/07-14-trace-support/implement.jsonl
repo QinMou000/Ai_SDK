@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/sdk-contracts.md","reason":"遵循 AIClient、Provider、HTTP、SSE 与工具执行的既有接口边界。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"保证 Trace 旁路异常不覆盖业务返回值、回调或原始异常。"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"复用默认静默和敏感信息禁止落盘的可观测性约束。"}
+{"file":".trellis/tasks/07-14-trace-support/research/trace-context-api.md","reason":"采用显式会话、父子步骤和随机标识的已确认设计。"}

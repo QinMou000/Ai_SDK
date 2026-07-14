@@ -10,9 +10,12 @@
 ### 2. 关键签名
 
 - `ChatResponse AIClient::chat(const ChatRequest& request)`
+- `ChatResponse AIClient::chat(const ChatRequest& request, TraceSession& trace_session)`
 - `void AIClient::streamChat(const ChatRequest& request, StreamCallback callback)`
+- `void AIClient::streamChat(const ChatRequest& request, StreamCallback callback, TraceSession& trace_session)`
 - `virtual ChatResponse IModelProvider::chat(const ChatRequest& request) = 0`
 - `virtual void IModelProvider::streamChat(const ChatRequest& request, StreamCallback callback) = 0`
+- `void AIClient::setProvider(std::shared_ptr<IModelProvider> provider)`
 
 ### 3. 契约
 
@@ -21,6 +24,8 @@
 - `ChatRequest` 必须保留消息顺序，`messages` 为空时依然属于调用方错误输入。
 - `chat()` 返回完整 `ChatResponse`；`streamChat()` 通过回调逐步返回文本增量或工具增量。
 - `streamChat()` 允许空回调时直接返回，不主动发请求。
+- Trace 重载只增加结构化旁路步骤，原返回值、异常和回调协议不变；详细约束引用 [Trace 契约](./trace-contracts.md)。
+- 自定义 Provider 实例必须非空且 `info().name` 非空，所有校验完成后才能替换当前实例。
 
 ### 4. 校验与错误矩阵
 
@@ -61,9 +66,11 @@
 
 ### 2. 关键签名
 
-- `DeepSeekProvider::DeepSeekProvider(const ProviderConfig& config)`
-- `nlohmann::json DeepSeekProvider::buildRequestJson(const ChatRequest& request, bool stream) const`
-- `std::vector<std::string> DeepSeekProvider::buildHeaders() const`
+- `DeepSeekProvider::DeepSeekProvider(ProviderConfig config, int timeout_ms = 30000)`
+- `DeepSeekProvider::DeepSeekProvider(ProviderConfig config, int timeout_ms, HttpClient http_client)`
+- `ChatResponse DeepSeekProvider::chat(const ChatRequest& request)`
+- `void DeepSeekProvider::streamChat(const ChatRequest& request, StreamCallback callback)`
+- `ProviderInfo DeepSeekProvider::info() const`
 
 ### 3. 契约
 
@@ -77,7 +84,7 @@
 
 | 条件 | 行为 |
 | --- | --- |
-| `api_key` 为空 | 抛 `std::runtime_error` |
+| `api_key` 为空 | 抛 `std::invalid_argument` |
 | 服务端返回非 2xx | 抛 `std::runtime_error`，优先拼接远端错误信息 |
 | 返回体缺少关键字段 | 抛 `std::runtime_error` 或 JSON 异常 |
 | `tools` 为空 | 请求体不写 `tools` 字段 |
@@ -112,14 +119,17 @@
 
 ### 2. 关键签名
 
-- `HttpResponse HttpClient::post(const HttpRequest& request)`
-- `void HttpClient::postStream(const HttpRequest& request, StreamHandler handler)`
-- `std::vector<SSEEvent> SSEParser::parseChunk(std::string_view chunk)`
+- `HttpResponse HttpClient::postJson(...)`
+- `HttpResponse HttpClient::postJsonStream(..., HttpStreamCallback callback)`
+- `virtual HttpResponse IHttpTransport::postJson(...) const`
+- `virtual HttpResponse IHttpTransport::postJsonStream(...) const`
+- `std::vector<StreamEvent> SSEParser::parseChunk(const std::string& chunk) const`
 
 ### 3. 契约
 
 - `HttpClient` 负责一次请求的一次传输，不向上层暴露 `cpr` 类型。
-- `postStream()` 在网络回调阶段收集完整响应文本，并在回调内部异常时延后重抛。
+- `IHttpTransport` 是窄传输边界；默认实现使用 cpr，本地确定性测试可注入脚本实现。
+- `postJsonStream()` 在网络回调阶段收集完整响应文本，并在回调内部异常时延后重抛。
 - `DeepSeekProvider::streamChat()` 负责把原始字节流缓冲成完整 SSE 事件边界，再交给 `SSEParser`。
 - `SSEParser` 接收“完整事件块”而非任意碎片，支持 `\r\n`、`\n`、`\r` 归一化。
 - 遇到 `[DONE]` 返回 `Done` 事件；遇到错误对象或非法 JSON 返回 `Error` 事件。
@@ -170,6 +180,7 @@
 - `ToolResult ToolRegistry::execute(const std::string& name, const nlohmann::json& arguments)`
 - `std::vector<ToolExecutionResult> ToolExecutor::executeAll(const std::vector<ToolCall>& calls)`
 - `std::vector<ToolExecutionResult> AIClient::executeToolCalls(const std::vector<ToolCall>& calls)`
+- `std::vector<ToolExecutionResult> AIClient::executeToolCalls(const std::vector<ToolCall>& calls, TraceSession& trace_session)`
 - `Message ToolExecutionResult::toToolMessage() const`
 
 ### 3. 契约
@@ -181,6 +192,7 @@
 - `ToolExecutionResult::toToolMessage()` 使用原 `call.id` 生成 `tool_call_id`；成功内容是 `result.data.dump()`，失败内容是 `result.error_message`。
 - `AIClient` 不追加消息历史、不自动再次调用 `chat()`、不判断是否继续循环；这些决策属于上层应用或 Agent。
 - `ToolRegistry` 当前不提供内部同步，并发注册或执行必须由调用方互斥。
+- Trace 重载保持相同批次结果契约；步骤层级、默认数据和线程安全边界引用 [Trace 契约](./trace-contracts.md)。
 
 ### 4. 校验与错误矩阵
 

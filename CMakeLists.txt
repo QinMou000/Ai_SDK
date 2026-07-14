@@ -12,6 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(cpr CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 
 add_library(ai_sdk
     src/core/Config.cpp
@@ -24,6 +25,8 @@ add_library(ai_sdk
     src/tool/Tool.cpp
     src/tool/ToolRegistry.cpp
     src/tool/ToolExecutor.cpp
+    src/trace/Trace.cpp
+    src/trace/TraceRecorder.cpp
     src/AIClient.cpp
 )
 
@@ -37,6 +40,7 @@ target_link_libraries(ai_sdk
         cpr::cpr
         nlohmann_json::nlohmann_json
         spdlog::spdlog
+        Threads::Threads
 )
 
 target_compile_features(ai_sdk PUBLIC cxx_std_17)

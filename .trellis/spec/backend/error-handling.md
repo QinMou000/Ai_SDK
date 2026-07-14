@@ -11,6 +11,7 @@
 - SSE 数据块解析失败
 - 流式回调内部抛错
 - 工具注册参数非法、未知工具和本地处理函数异常
+- Trace 内部记录和详情脱敏器异常
 
 ## 现有错误模型
 
@@ -66,6 +67,12 @@
 - `getTool` 用于显式查询，不存在时抛 `std::out_of_range`。
 - `execute` 的工具名称来自模型运行期输出；未知工具或本地处理函数异常必须转换为 `ToolResult::errorResult(...)`，不能中止同一批后续 Tool Call。
 
+### 6. Trace 错误不能穿透业务边界
+
+- Trace 开始、属性更新、详情保存和步骤结束失败都必须收敛为旁路无操作，不能改变业务异常或返回值。
+- 脱敏器抛异常或返回非对象时只保存固定诊断标记，不复制 `what()` 与原始数据。
+- Trace 安全摘要禁止直接使用 Provider、HTTP、SSE 或工具扩展抛出的原始异常文本。
+
 ## 验证与错误矩阵
 
 | 触发条件 | 当前行为 | 参考文件 |
@@ -83,6 +90,8 @@
 | `getTool` 查询未知名称 | 抛 `std::out_of_range` | `src/tool/ToolRegistry.cpp` |
 | 执行未知工具 | 返回失败 `ToolResult`，错误含工具名 | `src/tool/ToolRegistry.cpp` |
 | 工具处理函数抛异常 | 返回失败 `ToolResult`，错误含工具名和异常原因 | `src/tool/ToolRegistry.cpp` |
+| Trace 内部记录失败 | 不改变业务路径，当前步骤可能缺失旁路数据 | `src/trace/TraceRecorder.cpp` |
+| 详情脱敏器抛异常或返回非对象 | 保存固定诊断标记，业务调用继续 | `src/trace/TraceRecorder.cpp` |
 
 ## 新代码应遵循的模式
 
@@ -90,6 +99,7 @@
 - 错误消息优先写“失败动作 + 原因”，例如“创建 DeepSeek 请求失败：缺少 API Key”。
 - 不要吞掉底层异常后只返回模糊的“unknown error”。
 - 流式链路里不要把每个解析异常都直接 `throw` 到传输层，先判断是否更适合表达为错误事件。
+- Trace 记录失败不得覆盖当前正在传播的 Provider、HTTP、回调或工具异常。
 
 ## 常见错误
 

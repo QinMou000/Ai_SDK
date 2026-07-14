@@ -20,5 +20,6 @@ add_subdirectory(core)
 add_subdirectory(provider)
 add_subdirectory(tool)
 add_subdirectory(http)
+add_subdirectory(trace)
 
 add_test(NAME ai_sdk_smoke_test COMMAND ai_sdk_smoke_test)

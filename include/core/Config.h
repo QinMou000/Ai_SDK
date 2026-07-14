@@ -1,10 +1,9 @@
 #pragma once
 
 #include <filesystem>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <unordered_map>
-
-#include <nlohmann/json.hpp>
 
 namespace aiSDK {
 
@@ -28,7 +27,8 @@ struct Config {
     std::string default_provider = "deepseek";
     // timeout_ms 会传递到网络层，统一控制请求超时。
     int timeout_ms = 30000;
-    // enable_trace 为后续 Trace 链路预留统一开关。
+    // enable_trace 控制 AIClient 是否允许创建和写入显式 TraceSession。
+    // 关闭后即使传入外部有效会话，当前客户端也不会追加步骤。
     bool enable_trace = false;
 };
 
@@ -42,9 +42,7 @@ bool loadEnvFile(const std::filesystem::path& path, bool overwrite = false);
 
 // loadNearestEnvFile 从起始目录向上查找指定文件名，找到后立即加载。
 // 这适合示例程序和本地测试在任意子目录启动时自动发现仓库根目录的 .env。
-bool loadNearestEnvFile(const std::filesystem::path& start_directory,
-                        const std::string& filename = ".env",
-                        bool overwrite = false);
+bool loadNearestEnvFile(const std::filesystem::path& start_directory, const std::string& filename = ".env", bool overwrite = false);
 
 // resolveEnvPlaceholders 解析 ${KEY} 形式的占位符。
 // 未找到环境变量时会替换为空字符串，保持配置加载流程可继续执行。

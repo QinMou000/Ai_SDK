@@ -5,6 +5,7 @@
 #include "core/Message.h"
 #include "tool/ToolCall.h"
 #include "tool/ToolRegistry.h"
+#include "trace/TraceRecorder.h"
 
 namespace aiSDK {
 
@@ -32,6 +33,9 @@ class ToolExecutor {
     // ToolRegistry 会把未知工具和处理函数异常转成失败结果，
     // 因此单个失败不会中止同一批次中的后续调用。
     std::vector<ToolExecutionResult> executeAll(const std::vector<ToolCall>& calls);
+    // Trace 重载创建一个批次根步骤，并为每个 ToolCall 创建显式子步骤。
+    // TraceSession 线程安全不代表 ToolRegistry 线程安全，注册表并发仍由调用方协调。
+    std::vector<ToolExecutionResult> executeAll(const std::vector<ToolCall>& calls, TraceSession& trace_session);
 
    private:
     // registry_ 是非拥有引用，生命周期必须长于当前 ToolExecutor。

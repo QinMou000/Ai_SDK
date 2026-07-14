@@ -1,10 +1,12 @@
 #pragma once
 
 #include <string>
+#include <utility>
 
 #include "core/ChatRequest.h"
 #include "core/ChatResponse.h"
 #include "http/SSEParser.h"
+#include "trace/TraceRecorder.h"
 
 namespace aiSDK {
 
@@ -29,8 +31,19 @@ class IModelProvider {
 
     // chat 执行一次非流式请求，并返回统一的响应结构。
     virtual ChatResponse chat(const ChatRequest& request) = 0;
+    // Trace 重载接收显式父步骤；默认实现保留第三方 Provider 的原调用契约。
+    // 具体 Provider 可覆盖该入口，补充供应商和传输层子步骤。
+    // 默认委托保证未适配 Trace 的实现仍可工作，但不会伪造无法观测的内部事件。
+    virtual ChatResponse chat(const ChatRequest& request, TraceSession&, const std::string&) {
+        return chat(request);
+    }
     // streamChat 通过回调逐步产出结果，回调协议由 StreamEvent 定义。
     virtual void streamChat(const ChatRequest& request, StreamCallback callback) = 0;
+    // 默认 Trace 实现不伪造底层步骤，只委托现有无 Trace 接口。
+    // callback 只移动一次，保持原接口的所有权和异常传播约定。
+    virtual void streamChat(const ChatRequest& request, StreamCallback callback, TraceSession&, const std::string&) {
+        streamChat(request, std::move(callback));
+    }
     // info 返回 Provider 的静态能力描述，供初始化和测试复用。
     virtual ProviderInfo info() const = 0;
 };

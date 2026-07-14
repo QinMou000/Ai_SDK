@@ -707,33 +707,56 @@ P0
 * Model
 * HTTP 状态码
 * LLM 响应耗时
-* ToolCall 解析结果
-* Tool 执行参数
-* Tool 执行结果
-* 错误信息
+* ToolCall 与工具批次数量
+* 工具名称与执行状态
+* 脱敏器显式返回的工具参数或结果摘要
+* 不含底层原文的安全错误摘要
 
 ### 示例结构
 
 ```json
 {
-  "trace_id": "trace_001",
-  "provider": "deepseek",
-  "model": "deepseek-chat",
+  "trace_id": "0123456789abcdef0123456789abcdef",
   "steps": [
     {
-      "type": "llm_request",
-      "timestamp": 123456,
-      "duration_ms": 1200
+      "step_id": "0123456789abcdef",
+      "parent_step_id": null,
+      "sequence": 1,
+      "type": "model_request",
+      "status": "success",
+      "started_at": "2026-07-14T10:00:00.000Z",
+      "duration_ms": 1200,
+      "attributes": {
+        "provider": "deepseek",
+        "model": "deepseek-chat"
+      },
+      "details": {},
+      "error_code": "none",
+      "error_summary": ""
     },
     {
-      "type": "tool_call",
-      "tool_name": "get_current_time",
+      "step_id": "fedcba9876543210",
+      "parent_step_id": null,
+      "sequence": 2,
+      "type": "tool_batch",
+      "status": "success",
+      "started_at": "2026-07-14T10:00:01.300Z",
       "duration_ms": 5,
-      "status": "success"
+      "attributes": {
+        "tool_count": 1,
+        "success_count": 1
+      },
+      "details": {},
+      "error_code": "none",
+      "error_summary": ""
     }
   ]
 }
 ```
+
+每个步骤固定包含 `error_code`。成功步骤使用 `none`，失败步骤使用 SDK 固定失败枚举映射的机器码，`error_summary` 仅保存对应的安全中文摘要。`details` 中每个已处理槽位固定使用 `{"status": ..., "value": {...}}`：状态只允许 `recorded`、`rejected`、`sanitizer_failed`，后两种状态的 `value` 固定为空对象。
+
+脱敏器只接收四类明确的原始输入：`ModelRequest` 是 `chatRequestToJson(request)`，`ModelResponse` 是 `chatResponseToJson(response)`，`ToolArguments` 是解析后的 `ToolCall::arguments`，`ToolResult` 是包含 `success` 与 `data` 或 `error_message` 的结果对象。`TraceDetailContext::operation_name` 在模型详情中使用 Provider 名称，在工具详情中使用工具名称，便于调用方按操作建立独立白名单。原始输入仅供脱敏器同步处理，SDK 默认不保存它们。
 
 ### 优先级
 
@@ -741,10 +764,11 @@ P1
 
 ### 验收标准
 
-* 每次请求都有 trace_id。
-* ToolCall 能看到完整链路。
+* 开启 Trace 的显式会话都有唯一 trace_id。
+* 模型请求、ToolCall 和后续模型请求可复用同一会话形成完整链路。
 * 支持导出 JSON。
 * 支持关闭 Trace。
+* 默认不保存 API Key、用户消息、请求正文、工具参数和工具结果原文。
 
 ## 8.11 MCP Client 模块
 

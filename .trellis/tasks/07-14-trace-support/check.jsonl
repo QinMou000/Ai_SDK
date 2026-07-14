@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/trace-contracts.md","reason":"核对会话、步骤层级、白名单、脱敏、错误码和必要测试。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"执行本地格式化、Windows Debug 构建、全量测试和差异检查。"}
+{"file":".trellis/spec/backend/sdk-contracts.md","reason":"确认无 Trace 入口、空回调和工具批次的原有行为保持不变。"}

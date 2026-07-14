@@ -42,6 +42,7 @@ ctest --preset windows-debug --output-on-failure
 - `tests/provider/`：供应商请求和真实联机测试。
 - `tests/smoke/`：从 SDK 门面观察的最小通路。
 - `tests/tool/`：工具注册、批量执行、异常收敛和 Tool 结果消息转换；目标名为 `ai_sdk_tool_test`。
+- `tests/trace/`：Trace 会话、并发、脱敏、JSON 与跨层确定性验证；目标名为 `ai_sdk_trace_test`。
 
 ## 新增或修改代码时必须覆盖的验证点
 
@@ -51,12 +52,14 @@ ctest --preset windows-debug --output-on-failure
 - 修改 Provider 行为：补 `tests/provider/deepseek_provider_test.cpp` 同层断言；涉及外网时保留可跳过机制。
 - 修改 SDK 总入口或 Provider 选择：补 `tests/smoke/ai_sdk_smoke_test.cpp` 类似的最小集成断言。
 - 修改工具定义、注册表或执行器：补 `tests/tool/` 的正常、边界和错误恢复用例，并验证 `AIClient` 门面不会隐式发起网络请求。
+- 修改 Trace 或跨层埋点：补 `tests/trace/` 的关闭、成功、失败、并发、脱敏和敏感哨兵断言。
 
 ## 注释与编码验证
 
 - 新增 C++ 代码必须使用详细简体中文注释说明职责、输入输出、边界和设计原因，不能只复述代码字面逻辑。
 - 新增头文件、实现、示例和测试文件的注释覆盖率必须大于 30%；可按“以 `//` 开头的注释行 / 非空行”进行本地检查。
 - 所有新增或修改的代码文件必须保持 UTF-8 无 BOM，并通过仓库 `.clang-format` 格式化检查。
+- `.clang-format` 本身属于项目级格式契约；功能任务不得为了让当前改动通过而调整规则。确需变更时必须独立说明影响范围与理由，并重新验证所有受影响文件。
 
 ## 代码评审视角
 
