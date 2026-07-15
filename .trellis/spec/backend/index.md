@@ -19,6 +19,7 @@
 - HTTP 与流式解析由 `src/http/HttpClient.cpp`、`src/http/SSEParser.cpp` 承担。
 - Tool Call 本地执行由 `include/tool/`、`src/tool/` 和 `AIClient::executeToolCalls(...)` 承担。
 - 显式链路追踪由 `include/trace/`、`src/trace/` 和 `AIClient::startTrace()` 承担。
+- 上层同步 ReAct 编排由 `include/agent/`、`src/agent/` 和 `tests/agent/` 承担；它只能组合 `AIClient` 的公开入口。
 - 配置、消息、请求、响应模型位于 `include/core/` 与 `src/core/`。
 
 ## 开发前检查
@@ -26,6 +27,7 @@
 - 先读 [目录结构规范](./directory-structure.md)，确认改动应该落在 `include/`、`src/`、`tests/` 还是 `examples/`。
 - 如果改动触及 `AIClient`、Provider、HTTP/SSE 之间的数据边界，必须同时读 [SDK 契约](./sdk-contracts.md) 和 [错误处理](./error-handling.md)。
 - 如果改动触及工具注册、Tool Call 批量执行或结果消息转换，也必须同时读 [SDK 契约](./sdk-contracts.md) 和 [错误处理](./error-handling.md)。
+- 如果改动触及 `SimpleAgent`、风险等级筛选、工作区文件工具或 Agent Trace 组合，必须读 [Agent 契约](./agent-contracts.md)、[SDK 契约](./sdk-contracts.md) 和 [错误处理](./error-handling.md)。
 - 如果改动涉及调试、诊断或日志输出，先读 [日志规范](./logging-guidelines.md)。
 - 如果改动触及 Trace 会话、步骤、脱敏或任一跨层埋点，必须读 [Trace 契约](./trace-contracts.md)。
 - 如果改动引入持久化、缓存或外部存储能力，先读 [数据库与持久化规范](./database-guidelines.md)。
@@ -44,6 +46,7 @@
 
 - [目录结构规范](./directory-structure.md)：哪些代码应该放在什么目录，以及公开头文件与实现文件如何配合。
 - [SDK 契约](./sdk-contracts.md)：跨模块请求、响应、流式回调、配置和错误边界。
+- [Agent 契约](./agent-contracts.md)：无状态 ReAct Loop、低风险工具策略与工作区文本工具边界。
 - [错误处理](./error-handling.md)：异常类型、抛出时机、流式解析错误与调用方感知方式。
 - [日志规范](./logging-guidelines.md)：当前日志现状、允许的诊断方式、后续扩展约束。
 - [Trace 契约](./trace-contracts.md)：显式会话、步骤层级、线程安全、默认白名单与脱敏边界。

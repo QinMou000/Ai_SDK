@@ -11,6 +11,7 @@
 - SSE 数据块解析失败
 - 流式回调内部抛错
 - 工具注册参数非法、未知工具和本地处理函数异常
+- Agent 输入、内部熔断、风险拦截和工作区文件工具失败
 - Trace 内部记录和详情脱敏器异常
 
 ## 现有错误模型
@@ -38,6 +39,13 @@
   - 注册定义非法时抛 `std::invalid_argument`
   - 查询不存在的定义时抛 `std::out_of_range`
   - 执行未知工具或处理函数抛异常时返回失败 `ToolResult`，保证同批其他调用继续执行
+- `src/agent/SimpleAgent.cpp`
+  - 空输入、Provider 或未收敛运行期失败统一收敛为失败 `AgentResult`
+  - 已注册的 Medium/High 工具调用返回失败 Observation，不执行 handler
+  - 16 次连续 Tool Call 返回安全熔断失败，不发起第 17 次请求
+- `src/agent/WorkspaceFileTools.cpp`
+  - 根目录和重复名称配置错误抛 `std::invalid_argument`
+  - 模型路径、文本编码、容量与文件系统运行期失败由 `ToolRegistry` 转为失败 `ToolResult`
 
 ## 当前约定
 

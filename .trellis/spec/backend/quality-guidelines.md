@@ -43,6 +43,7 @@ ctest --preset windows-debug --output-on-failure
 - `tests/smoke/`：从 SDK 门面观察的最小通路。
 - `tests/tool/`：工具注册、批量执行、异常收敛和 Tool 结果消息转换；目标名为 `ai_sdk_tool_test`。
 - `tests/trace/`：Trace 会话、并发、脱敏、JSON 与跨层确定性验证；目标名为 `ai_sdk_trace_test`。
+- `tests/agent/`：脚本化 Provider 驱动的 ReAct 循环、风险策略和系统临时目录中的工作区文件边界；目标名为 `ai_sdk_agent_test`。
 
 ## 新增或修改代码时必须覆盖的验证点
 
@@ -53,6 +54,7 @@ ctest --preset windows-debug --output-on-failure
 - 修改 SDK 总入口或 Provider 选择：补 `tests/smoke/ai_sdk_smoke_test.cpp` 类似的最小集成断言。
 - 修改工具定义、注册表或执行器：补 `tests/tool/` 的正常、边界和错误恢复用例，并验证 `AIClient` 门面不会隐式发起网络请求。
 - 修改 Trace 或跨层埋点：补 `tests/trace/` 的关闭、成功、失败、并发、脱敏和敏感哨兵断言。
+- 修改 Agent 或工作区工具：补 `tests/agent/` 的多轮循环、任务隔离、工具失败恢复、风险拦截、熔断和真实目录链接逃逸断言；不得以真实 API 或仓库工作树代替离线验证。
 
 ## 注释与编码验证
 

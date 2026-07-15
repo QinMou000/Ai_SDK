@@ -27,6 +27,8 @@ add_library(ai_sdk
     src/tool/ToolExecutor.cpp
     src/trace/Trace.cpp
     src/trace/TraceRecorder.cpp
+    src/agent/SimpleAgent.cpp
+    src/agent/WorkspaceFileTools.cpp
     src/AIClient.cpp
 )
 

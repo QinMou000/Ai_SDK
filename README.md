@@ -12,6 +12,7 @@
 * 本地 C++ 工具注册、稳定列举、串行执行与异常收敛
 * 由 `AIClient::executeToolCalls(...)` 暴露的显式单批 Tool Call 执行接口
 * 显式 `TraceSession`、线程安全步骤快照、默认安全元数据与 JSON 导出
+* 位于 `AIClient` 上层的同步 `SimpleAgent`，提供最小 ReAct 循环与受限工作区文件工具
 
 ## 目录结构
 
@@ -61,6 +62,7 @@ ai_sdk/
     tool/
     http/
     trace/
+    agent/
 ```
 
 ## 依赖要求
@@ -213,6 +215,7 @@ cmake --build --preset linux-release -v
 * `examples/01_chat_deepseek`
 * `examples/03_stream_chat`
 * `examples/05_tool_call`
+* `examples/06_simple_agent`
 * `loadConfigFromFile(...)`
 
 这几个入口都会从当前目录向上查找最近的 `.env` 文件。也就是说：
@@ -302,6 +305,40 @@ std::vector<ToolExecutionResult> results =
 ```
 
 `executeToolCalls(...)` 保持模型返回顺序。未知工具或本地处理函数异常会转换为失败的 `ToolResult`，不会阻断同一批中的其他工具调用。
+
+### SimpleAgent ReAct 示例
+
+`SimpleAgent` 是 `AIClient` 之上的可复用同步编排层，不修改 `AIClient` 的请求、Provider 或传输语义。每次 `run(...)` 都从独立的系统消息和用户消息开始：模型返回 Tool Call 时，Agent 执行工具并回填 assistant/tool 消息；模型不再返回 Tool Call 时，当前文本即为最终答案。为防止异常循环，内部最多发起 16 次模型请求，但调用方不需要也不能传入循环轮次。
+
+配置 `DEEPSEEK_API_KEY` 后，可运行在线示例：
+
+```powershell
+.\build\windows-debug\examples\06_simple_agent\example_simple_agent.exe "请查询当前时间，并计算 12.5 加 7.5"
+```
+
+示例注册两个业务 `Low` 工具：`get_current_time` 与 `add_numbers`；同时把**启动时的当前工作目录**作为显式工作区根目录，注册以下五个 `Low` 文件工具：
+
+* `list_directory`：列出单层目录条目。
+* `read_text_file`：读取 UTF-8 文本文件。
+* `create_text_file`：只新建不存在的文本文件。
+* `write_text_file`：只覆盖已经存在的文本文件。
+* `replace_text_in_file`：只精确替换唯一的一处文本。
+
+文件路径必须相对工作区；工具拒绝绝对路径、越界路径、符号链接逃逸、`.git`、`.env`、常见私钥以及非 UTF-8 文本。单个文件和写入内容最大为 64 KiB，目录列表最多返回 256 项。生产调用应传入最小必要的专用目录；若不在 `SimpleAgentOptions` 中提供 `WorkspaceFileToolOptions`，Agent 不会注册任何文件工具。
+
+```cpp
+AIClient client(config);
+client.tools().registerTool(low_risk_tool, handler);
+
+SimpleAgentOptions options;
+options.workspace_file_tools = WorkspaceFileToolOptions{"D:/agent-workspace"};
+SimpleAgent agent(client, std::move(options));
+
+TraceSession trace = client.startTrace();
+AgentResult result = agent.run("整理工作区中的说明文件", trace);
+```
+
+Agent 每轮只向模型展示并自动执行 `ToolRiskLevel::Low` 工具。模型臆造的 `Medium` 或 `High` 工具不会执行，拒绝结果会作为 Tool 消息回填给模型。工具失败和未知工具同样会回填，模型可以选择修复参数、改用其他工具或直接解释失败。
 
 ### Trace 链路追踪
 
@@ -408,6 +445,7 @@ ctest --preset local-windows-debug --output-on-failure
 * `tests/tool/ai_sdk_tool_test`
 * `tests/http/ai_sdk_http_test`
 * `tests/trace/ai_sdk_trace_test`
+* `tests/agent/ai_sdk_agent_test`：离线覆盖多轮 ReAct、独立任务、工具失败恢复、风险拦截、熔断、Trace 与工作区文件边界。
 
 ## 本地环境说明
 
@@ -435,11 +473,13 @@ ctest --preset local-windows-debug --output-on-failure
 * Tool Schema 请求序列化、Tool Call 响应解析
 * 本地工具注册、单批串行执行和 Tool 结果消息转换
 * 显式、线程安全、默认脱敏的内存 Trace 与 JSON 导出
+* 无会话状态的同步 `SimpleAgent`、低风险工具策略与受限工作区文本工具
 * 可本地执行的核心测试与在线 Provider 测试入口
 
 下一步的实现重点会是：
 
 * 更完整的工具参数 Schema 校验
 * 流式 Tool Call 增量聚合
+* Agent 会话管理、短期/长期记忆与按工具审批策略
 * `MiniMaxProvider`
 * Trace 持久化与 OpenTelemetry 适配（当前 Trace 只存在于内存中，支持 snapshot() 和 toJson()；进程退出后数据就消失，也不会发送给外部监控系统。）
