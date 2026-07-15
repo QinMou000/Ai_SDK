@@ -12,10 +12,11 @@
 - 流式回调内部抛错
 - 工具注册参数非法、未知工具和本地处理函数异常
 - Trace 内部记录和详情脱敏器异常
+- MCP 配置、生命周期、协议、传输、会话与工具副作用不确定性
 
 ## 现有错误模型
 
-当前代码以 C++ 异常为主，没有自定义统一错误类。调用者通过异常类型和错误消息区分失败来源。
+核心聊天代码仍以标准 C++ 异常为主；独立 MCP 模块使用闭合的 `MCPErrorCode` 与 `MCPException`，调用方必须按结构化字段分支，不能解析诊断文本。
 
 ### 常见抛出点
 
@@ -38,6 +39,12 @@
   - 注册定义非法时抛 `std::invalid_argument`
   - 查询不存在的定义时抛 `std::out_of_range`
   - 执行未知工具或处理函数抛异常时返回失败 `ToolResult`，保证同批其他调用继续执行
+- `src/mcp/MCPClient.cpp`
+  - 生命周期、协议与传输运行期失败抛 `MCPException`
+  - `OutcomeUnknown` 必须携带 `causeCode()`、`mayHaveExecuted()==true` 和失败状态快照
+  - 公开错误文本按 `max_error_text_bytes` 进行 UTF-8 安全截断，不暴露路径、凭据、Session 或远端错误原文
+- `src/mcp/MCPToolAdapter.cpp`
+  - 远端业务失败与 MCP 异常收敛为有界 `ToolResult`；富媒体不会偷塞进现有结果合同
 
 ## 当前约定
 
@@ -73,6 +80,14 @@
 - 脱敏器抛异常或返回非对象时只保存固定诊断标记，不复制 `what()` 与原始数据。
 - Trace 安全摘要禁止直接使用 Provider、HTTP、SSE 或工具扩展抛出的原始异常文本。
 
+### 7. MCP 错误必须区分“未提交”与“结果未知”
+
+- 配置非法在构造期抛 `std::invalid_argument`，且不得产生进程或网络 I/O。
+- 生命周期与传输运行期使用 `MCPException`；`code()` 是顶层分类，`clientStateAtFailure()` 是线性化状态快照。
+- 工具请求在 `commitPrepared()` 前失败时不得标记可能已执行；提交后若缺少终局 JSON-RPC 结果，统一提升为 `OutcomeUnknown`。
+- `OutcomeUnknown` 必须保留稳定根因，例如 `TransportFailure`、`RequestTimeout` 或 `SessionExpired`，并设置 `mayHaveExecuted=true`。上层必须提示人工核对，禁止自动重试。
+- Server 错误正文、libcurl 文本、stderr、可执行路径、凭据和 Session ID 都不能进入公开异常。Adapter 只输出固定中文分类和有界业务文本。
+
 ## 验证与错误矩阵
 
 | 触发条件 | 当前行为 | 参考文件 |
@@ -92,6 +107,12 @@
 | 工具处理函数抛异常 | 返回失败 `ToolResult`，错误含工具名和异常原因 | `src/tool/ToolRegistry.cpp` |
 | Trace 内部记录失败 | 不改变业务路径，当前步骤可能缺失旁路数据 | `src/trace/TraceRecorder.cpp` |
 | 详情脱敏器抛异常或返回非对象 | 保存固定诊断标记，业务调用继续 | `src/trace/TraceRecorder.cpp` |
+| MCP 配置不合法 | 构造期抛 `std::invalid_argument`，零 I/O | `src/mcp/MCPServerConfig.cpp` |
+| MCP 并发公开操作 | 抛 `MCPException(ClientBusy)`，不等待 | `src/mcp/MCPClient.cpp` |
+| MCP 工具提交前目录失效 | 抛 `MCPException(ToolCatalogStale)`，零提交 | `src/mcp/MCPClient.cpp` |
+| MCP 工具提交后终局丢失 | 抛 `MCPException(OutcomeUnknown)`，保留根因与副作用标志 | `src/mcp/MCPClient.cpp` |
+| MCP 远端业务失败 | Client 无损返回；Adapter 转为有界失败 `ToolResult` | `src/mcp/MCPToolAdapter.cpp` |
+| MCP 富媒体结果进入现有 Adapter | 返回固定“不支持 MCP 富媒体工具结果”，不暴露正文 | `src/mcp/MCPToolAdapter.cpp` |
 
 ## 新代码应遵循的模式
 
@@ -100,9 +121,11 @@
 - 不要吞掉底层异常后只返回模糊的“unknown error”。
 - 流式链路里不要把每个解析异常都直接 `throw` 到传输层，先判断是否更适合表达为错误事件。
 - Trace 记录失败不得覆盖当前正在传播的 Provider、HTTP、回调或工具异常。
+- MCP 上层不得依据 `what()` 决定重试；必须使用错误码、根因和 `mayHaveExecuted()`。
 
 ## 常见错误
 
 - 把外部服务错误都映射成 `invalid_argument`，导致调用者误判为本地参数问题。
 - 在底层捕获异常后不补上下文，最终只剩 JSON 库原始报错。
 - 让解析器、HTTP 客户端和 Provider 同时决定错误文案，造成重复和冲突。
+- 把已提交 MCP 工具的断线降级为普通 `TransportFailure` 并自动重试，造成重复副作用。

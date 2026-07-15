@@ -12,6 +12,7 @@
 * 本地 C++ 工具注册、稳定列举、串行执行与异常收敛
 * 由 `AIClient::executeToolCalls(...)` 暴露的显式单批 Tool Call 执行接口
 * 显式 `TraceSession`、线程安全步骤快照、默认安全元数据与 JSON 导出
+* 独立可选的 MCP Client，支持本地 stdio 与 MCP Streamable HTTP，并可显式适配到现有 `ToolRegistry`
 
 ## 目录结构
 
@@ -34,6 +35,7 @@ ai_sdk/
     http/
     tool/
     trace/
+    mcp/
     agent/
 
   src/
@@ -43,6 +45,7 @@ ai_sdk/
     http/
     tool/
     trace/
+    mcp/
     agent/
 
   examples/
@@ -53,6 +56,7 @@ ai_sdk/
     05_tool_call/
     06_simple_agent/
     07_trace/
+    08_mcp_tool_call/
 
   tests/
     smoke/
@@ -61,6 +65,7 @@ ai_sdk/
     tool/
     http/
     trace/
+    mcp/
 ```
 
 ## 依赖要求
@@ -104,6 +109,8 @@ ai_sdk/
 * `CMakePresets.json` 用于仓库共享配置
 * `CMakeUserPresets.json` 用于本机私有配置
 * 当前本机私有配置里，`VCPKG_ROOT` 指向 `D:/vcpkg`
+
+`AISDK_BUILD_MCP` 默认开启，并生成独立的 `ai_sdk_mcp` 目标。应用使用 MCP 时需要显式链接该目标；核心 `ai_sdk` 不会反向依赖或持有 MCP 连接。若当前构建完全不需要 MCP，可在配置时传入 `-DAISDK_BUILD_MCP=OFF`，此时 MCP 源文件、示例和测试目标都不会进入构建图。
 
 ### Windows 本地编译
 
@@ -382,6 +389,43 @@ Trace JSON 的每个步骤都固定包含 `error_code` 和 `error_summary`。成
 
 迁移说明：早期预留的 `TraceRecorder(Trace)`、`addStep(...)` 和返回内部引用的 `snapshot()` 已移除。新代码应从 `AIClient::startTrace()` 获取会话，通过带 `TraceSession&` 的公开重载记录链路，并使用 `TraceSession::snapshot()` 按值读取稳定快照。
 
+### MCP Tool Call 示例
+
+MCP 由 Agent 或应用层显式持有，不并入 `AIClient`，也不会自动形成 Agent Loop。一个 `MCPClient` 对应一个 Server 和一个逻辑会话；每个实例最多允许一个用户公开操作在途，后台 GET SSE、通知处理、状态读取和 `close()` 不占该名额。需要并行工具调用时，应由上层创建多个 Client 或 Client Pool。
+
+下面是 stdio Client 的最小配置。可执行文件必须是绝对路径，参数按独立 `argv` 项传递，SDK 不经过 shell；Windows 的 `.cmd`、`.bat` 或其他脚本必须由应用显式指定真实解释器：
+
+```cpp
+aiSDK::MCPStdioServerConfig stdio;
+stdio.executable = std::filesystem::path("D:/tools/mcp-server.exe");
+stdio.arguments = {"--mode", "stdio"};
+stdio.working_directory = std::filesystem::current_path();
+stdio.inherit_parent_environment = false;
+
+aiSDK::MCPServerConfig config;
+config.server_id = "local_tools";
+config.transport = std::move(stdio);
+
+auto client = std::make_shared<aiSDK::MCPClient>(std::move(config));
+client->connect();
+const aiSDK::MCPToolCatalog catalog = client->listTools();
+// 由应用执行白名单、审批和别名映射后，再显式创建并注册 Binding。
+client->close();
+```
+
+Streamable HTTP 使用 `MCPStreamableHttpConfig`，生产 Endpoint 只接受 HTTPS。开发期明文 HTTP 必须显式开启 `allow_loopback_http`，且地址只能是字面量 IPv4/IPv6 回环地址。实现始终校验证书和主机名、禁止自动重定向并显式忽略环境代理；首版不暴露自定义 CA、mTLS、代理、代理认证或关闭 TLS 校验的生产入口。初始化后会默认尝试建立后台 GET SSE；Server 返回 405 时正常降级为仅处理 POST JSON/SSE。
+
+远端工具不会被自动注册。应用必须从签发的 Catalog 中选择工具，设置本地别名和风险级别，再通过 `MCPToolAdapter` 生成 Binding。所有远端工具默认高风险；目录发生 `tools/list_changed` 后，旧 Catalog 与 Binding 会失效，上层需要先批量注销，再重新列举、审核和绑定。Adapter 的同步 Handler 会阻塞调用线程直到结果或超时，并且首版只适配文本与对象形态的 `structuredContent`；富媒体结果仍可从 `MCPClient::callTool()` 的无损结果读取，但不能进入现有 `ToolResult`。
+
+构建后可运行离线 stdio 示例：
+
+```powershell
+.\build\windows-debug\examples\08_mcp_tool_call\example_mcp_tool_call.exe `
+  "D:\tools\mcp-server.exe" "远端工具名" "{}" "--server-arg"
+```
+
+示例和真实应用都应显式调用 `close()`；析构函数只提供有界的最佳努力清理。若配置 stderr 回调，回调内容来自不受信任的 Server，应用必须自行脱敏。
+
 ## 测试方式
 
 ### 全量测试
@@ -408,6 +452,15 @@ ctest --preset local-windows-debug --output-on-failure
 * `tests/tool/ai_sdk_tool_test`
 * `tests/http/ai_sdk_http_test`
 * `tests/trace/ai_sdk_trace_test`
+* `tests/mcp/ai_sdk_mcp_test`
+* `tests/mcp/ai_sdk_mcp_stdio_test`
+* `tests/mcp/ai_sdk_mcp_http_test`
+
+MCP 开启时，顶层 CTest 清单固定包含 `ai_sdk_mcp_test`、`ai_sdk_mcp_stdio_test` 和 `ai_sdk_mcp_http_test` 三项，并统一带有 `mcp` 标签。可单独执行：
+
+```powershell
+ctest --preset windows-debug -L mcp --output-on-failure --no-tests=error
+```
 
 ## 本地环境说明
 
@@ -435,6 +488,7 @@ ctest --preset local-windows-debug --output-on-failure
 * Tool Schema 请求序列化、Tool Call 响应解析
 * 本地工具注册、单批串行执行和 Tool 结果消息转换
 * 显式、线程安全、默认脱敏的内存 Trace 与 JSON 导出
+* 独立 MCP Client、stdio / Streamable HTTP 传输和显式 Tool Adapter
 * 可本地执行的核心测试与在线 Provider 测试入口
 
 下一步的实现重点会是：
@@ -443,3 +497,5 @@ ctest --preset local-windows-debug --output-on-failure
 * 流式 Tool Call 增量聚合
 * `MiniMaxProvider`
 * Trace 持久化与 OpenTelemetry 适配（当前 Trace 只存在于内存中，支持 snapshot() 和 toJson()；进程退出后数据就消失，也不会发送给外部监控系统。）
+* MCP Resources、Prompts 与完整 OAuth 2.1 支持
+* Agent 层的 Skill Loader 与 Skill Registry；Skill 不并入 MCP 协议模块

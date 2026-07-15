@@ -6,7 +6,7 @@
 
 可选名称：
 
-**AI SDK：一个支持多模型、ToolCall、MCP、Skill 扩展的纯 C++ AI SDK**
+**AI SDK：一个支持多模型、ToolCall 与 MCP 扩展的纯 C++ AI SDK**
 
 ## 2. 项目定位
 
@@ -14,7 +14,7 @@
 
 本项目第一阶段要做的是：
 
-> 一个纯 C++ 实现的 AI SDK，向上为 Agent、ChatBot、AI 应用提供统一的大模型调用、流式输出、ToolCall、工具注册、MCP 接入和 Skill 加载能力。
+> 一个纯 C++ 实现的 AI SDK，向上为 Agent、ChatBot、AI 应用提供统一的大模型调用、流式输出、ToolCall、工具注册和 MCP 协议能力；Skill 加载与选择属于上层 Agent。
 
 也就是说：
 
@@ -29,7 +29,7 @@
           ↓
 Agent 层：Agent Loop / Planner / Memory / Skill Selector
           ↓
-SDK 层：Model Client / ToolCall / MCP Client / Skill Loader / Trace
+SDK 层：Model Client / ToolCall / MCP Client / Trace
           ↓
 基础层：HTTP / JSON / SSE / SQLite / Config / Logger
 ```
@@ -65,7 +65,7 @@ SDK 层：Model Client / ToolCall / MCP Client / Skill Loader / Trace
    * 不同模型返回格式可能略有差异。
    * SDK 应该统一解析成自己的 `ToolCall` 结构。
 
-3. **后续要接 MCP / Skill**
+3. **后续要接 MCP，并为 Agent 层 Skill 预留通用工具边界**
 
    * 如果前期没有设计扩展点，后面会很难加。
 
@@ -76,7 +76,7 @@ SDK 层：Model Client / ToolCall / MCP Client / Skill Loader / Trace
 
 ## 4. 一句话目标
 
-**用纯 C++ 实现一个轻量级 AI SDK，先支持 DeepSeek 和 MiniMax 两个模型，提供 Chat、Stream、ToolCall、Tool Registry、MCP Client、Skill Loader 等基础能力，并为后续 Agent Runtime 提供底层支撑。**
+**用纯 C++ 实现一个轻量级 AI SDK，先支持 DeepSeek 和 MiniMax 两个模型，提供 Chat、Stream、ToolCall、Tool Registry、MCP Client 等基础能力，并为后续 Agent Runtime 与 Skill Loader 提供底层支撑。**
 
 ## 5. 首期支持范围
 
@@ -185,27 +185,25 @@ Tool Registry 负责管理本地工具。
 * Shell 工具
 * Python 脚本工具
 * MCP 工具
-* Skill 工具
+* 由上层 Agent 从 Skill 中解析并显式注册的本地工具
 
 ## 6.5 MCP Client
 
-MCP Client 作为 SDK 的扩展能力。
-
-第一阶段可以先设计接口，不一定立刻完整实现。
+MCP Client 是独立于 `AIClient` 的可选 SDK 能力，由 Agent 或应用持有。
 
 目标：
 
 * 连接外部 MCP Server
+* 同时支持本地 stdio 与远程 Streamable HTTP
 * 获取 MCP Server 提供的 tools
-* 把 MCP tool 转换成本地统一 Tool
+* 经上层白名单与风险审批后，把选定 MCP tool 转换成本地统一 Tool
 * 通过 SDK ToolCall 机制调用 MCP Tool
 
-## 6.6 Skill Loader
+## 6.6 Agent Skill Loader
 
-Skill Loader 用于加载本地能力包。
+Skill Loader 用于加载本地能力包，但它属于 Agent 层的后续独立模块，不属于 MCP 协议 SDK。
 
-Skill 不是 Agent 本身。
-Skill 是 SDK 可以读取的一组工具、说明、资源和脚本。
+Skill 不是 MCP Server，也不是 SDK 自动执行入口。它是一组供 Agent 读取的说明、资源、脚本和工具声明。
 
 示例：
 
@@ -220,8 +218,7 @@ skills/
       analyze.py
 ```
 
-SDK 只负责加载和解析 Skill。
-至于“什么时候用这个 Skill”，应该由后续 Agent 层决定。
+Agent 通过 SDK 已有的文件读取、工具注册和 MCP Client 等基础能力加载 Skill，并决定何时使用。SDK 首版不提供 `SkillLoader`、`SkillRegistry` 或自动扫描行为。
 
 ## 6.7 Agent Layer
 
@@ -774,18 +771,17 @@ P1
 
 ### 功能描述
 
-为后续接入 MCP Server 做准备。
-
-第一版可以先做接口和最小 Demo。
+提供独立可选的 MCP Client，不修改 `AIClient` 的连接所有权。
 
 ### MVP 范围
 
 * MCP Server 配置
-* 启动本地 MCP Server
+* 无 Shell 启动本地 stdio MCP Server
+* 连接远程 Streamable HTTP MCP Server
 * 初始化连接
 * 获取 tools/list
 * 调用 tools/call
-* 转换为 SDK Tool
+* 经显式筛选、别名和风险覆盖后转换为 SDK Tool
 
 ### 优先级
 
@@ -793,25 +789,25 @@ P2
 
 ### 验收标准
 
-* 能接一个最简单的 MCP Server。
-* 能把 MCP tool 注册到 ToolRegistry。
+* stdio 和 Streamable HTTP 均通过本地真实集成测试。
+* 能把经过上层审批的 MCP tool 显式注册到 ToolRegistry。
 * 能通过 SDK ToolExecutor 调用 MCP tool。
 
-## 8.12 Skill Loader 模块
+## 8.12 Agent Skill Loader 模块
 
 ### 功能描述
 
-加载本地 Skill 目录。
+由后续 Agent Runtime 加载本地 Skill 目录；该模块不属于当前 SDK/MCP 交付范围。
 
 ### 第一版 Skill 不负责自动决策
 
-SDK 只做：
+未来 Agent 层负责：
 
 * 扫描 Skill
 * 读取 SKILL.md
 * 读取 tools.json
-* 注册 Skill 中的工具
-* 提供 Skill 描述给上层 Agent
+* 经审批后调用 SDK 注册 Skill 中的工具
+* 把 Skill 描述提供给 Planner / Selector
 
 ### 目录结构
 
@@ -1090,12 +1086,12 @@ Agent：
 Agent 调用 MCP filesystem tool。
 ```
 
-## v0.7：Skill Loader
+## v0.7：Agent Skill Loader
 
 目标：
 
-* 支持本地 Skill。
-* Skill 可以被 Agent 查询和加载。
+* 在 Agent 层支持本地 Skill。
+* Skill 可以被 Agent 查询和加载，不修改 MCP 协议模块。
 
 交付物：
 
@@ -1159,13 +1155,11 @@ ai_sdk/
         MCPClient.h
         MCPToolAdapter.h
 
-      skill/
+      agent/
+        SimpleAgent.h
         Skill.h
         SkillLoader.h
         SkillRegistry.h
-
-      agent/
-        SimpleAgent.h
 
       AIClient.h
 
@@ -1176,8 +1170,8 @@ ai_sdk/
     tool/
     trace/
     mcp/
-    skill/
     agent/
+      skill/
 
   examples/
     01_chat_deepseek/
@@ -1186,13 +1180,17 @@ ai_sdk/
     04_register_tool/
     05_tool_call/
     06_simple_agent/
-    07_mcp_demo/
-    08_skill_demo/
+    07_trace/
+    08_mcp_tool_call/
+    09_agent_skill_demo/  # 后续 Agent 层候选，不属于当前 SDK 交付
 
   tests/
     core/
     provider/
     tool/
+    http/
+    trace/
+    mcp/
     agent/
 
   skills/
@@ -1325,11 +1323,11 @@ struct ToolResult {
 
 这个项目后续可以包装成：
 
-> 基于 C++17 设计并实现轻量级 AI SDK，支持 DeepSeek / MiniMax 多模型统一接入、SSE 流式响应、ToolCall 协议解析、本地工具注册与执行、MCP 工具扩展和 Skill 能力包加载；在 SDK 基础上实现 Simple Agent Demo，完成 LLM-Tool-LLM 多轮调用闭环，并通过 Trace 记录模型请求与工具调用链路，提升 Agent 行为可观测性和可调试性。
+> 基于 C++17 设计并实现轻量级 AI SDK，支持 DeepSeek / MiniMax 多模型统一接入、SSE 流式响应、ToolCall 协议解析、本地工具注册与执行和 MCP 工具扩展；在 SDK 基础上由 Agent 层加载 Skill 并实现 Simple Agent Demo，完成 LLM-Tool-LLM 多轮调用闭环，通过 Trace 提升行为可观测性和可调试性。
 
 更短一点：
 
-> 设计并实现纯 C++ AI SDK，封装 DeepSeek / MiniMax 模型接入、流式响应、ToolCall、工具注册、MCP 与 Skill 扩展能力，并基于 SDK 实现轻量 Agent 执行闭环。
+> 设计并实现纯 C++ AI SDK，封装 DeepSeek / MiniMax 模型接入、流式响应、ToolCall、工具注册与 MCP 能力，并基于 SDK 实现带 Skill 加载的轻量 Agent 执行闭环。
 
 ## 16. 项目亮点
 
@@ -1353,7 +1351,7 @@ struct ToolResult {
 
    * 从 ChatSDK 升级到 AgentSDK 的关键。
 
-5. **MCP / Skill 预留生态扩展**
+5. **MCP 与 Agent Skill 生态边界清晰**
 
    * 后续有想象空间。
    * 面试时能讲架构演进。

@@ -1,7 +1,9 @@
 #include "tool/ToolRegistry.h"
 
+#include <algorithm>
 #include <exception>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 
 namespace aiSDK {
@@ -37,6 +39,50 @@ void ToolRegistry::registerTool(const Tool& tool, ToolHandler handler) {
     if(is_new_tool) {
         tool_order_.push_back(tool.name);
     }
+}
+
+void ToolRegistry::unregisterTool(const std::string& name) {
+    // 单项入口复用批量入口的校验和清理规则，避免两套注销语义逐步漂移。
+    // 临时批次在任何注册表修改前构造完成，分配失败不会留下部分状态。
+    unregisterTools(std::vector<std::string>{name});
+}
+
+void ToolRegistry::unregisterTools(const std::vector<std::string>& names) {
+    // 空批次直接返回，既避免无意义扫描顺序表，也保证幂等清理没有额外分配。
+    if(names.empty()) {
+        return;
+    }
+
+    // 唯一名称集合同时承担重复检查和后续顺序表过滤。
+    // 所有可能抛出的业务校验都必须发生在修改三个内部容器之前。
+    std::unordered_set<std::string> unique_names;
+    unique_names.reserve(names.size());
+
+    for(const auto& name : names) {
+        // 空名称无法对应稳定的工具键，应作为调用方输入错误整体拒绝。
+        if(name.empty()) {
+            throw std::invalid_argument("注销工具名称不能为空");
+        }
+        // 重复名称通常意味着上层绑定清单存在错误，静默合并会掩盖该问题。
+        if(!unique_names.insert(name).second) {
+            throw std::invalid_argument("批量注销包含重复工具名称: " + name);
+        }
+    }
+
+    // 校验成功后再同步清除定义与处理函数；erase 对未知键天然保持幂等。
+    // 两张表使用同一名称集合，保证工具可见性与可执行性不会主动分叉。
+    for(const auto& name : unique_names) {
+        tools_.erase(name);
+        handlers_.erase(name);
+    }
+
+    // 顺序表移除全部目标名称，但保留其他工具之间的相对顺序。
+    // 旧位置被真正删除后，同名工具再次注册会自然追加到列表末尾。
+    //  std::remove_if 它不会真正删除容器元素，而是把“不满足删除条件”的元素搬到前面，并返回新的逻辑末尾。
+    tool_order_.erase(
+        std::remove_if(tool_order_.begin(), tool_order_.end(),
+                       [&](const std::string& name) { return unique_names.find(name) != unique_names.end(); }),
+        tool_order_.end());
 }
 
 bool ToolRegistry::hasTool(const std::string& name) const {

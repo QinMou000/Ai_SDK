@@ -1,7 +1,7 @@
 BasedOnStyle: Google
 IndentWidth: 4
 UseTab: Never
-ColumnLimit: 160
+ColumnLimit: 120
 SpaceBeforeParens: Never
 DerivePointerAlignment: false
 PointerAlignment: Left

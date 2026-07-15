@@ -244,3 +244,85 @@ const std::vector<ToolExecutionResult> results =
 
 // 是否转换结果消息并发起下一次 chat，由上层调用方显式决定。
 ```
+
+## 场景五：独立 MCP Client 与工具适配契约
+
+### 1. 作用范围 / 触发条件
+
+- 触发：修改 `include/mcp/`、`src/mcp/`、`tests/mcp/`、`MCPToolAdapter`，或把远端 MCP 工具接入现有 `ToolRegistry`。
+- 目标：提供 stdio 与 Streamable HTTP 协议能力，同时保持连接所有权、安全审批和 Agent Loop 决策都在上层应用。
+
+### 2. 关键签名
+
+- `MCPClient::MCPClient(MCPServerConfig config, std::shared_ptr<IMCPTransport> transport = nullptr)`
+- `void MCPClient::connect()` / `ping()` / `close() noexcept`
+- `MCPToolCatalog MCPClient::listTools()`
+- `MCPToolCallResult MCPClient::callTool(const MCPToolCatalog&, const std::string&, const nlohmann::json&)`
+- `std::unique_ptr<IMCPPreparedMessage> IMCPTransport::prepareMessage(...)`
+- `void IMCPTransport::commitPrepared(std::unique_ptr<IMCPPreparedMessage>, std::chrono::steady_clock::time_point request_deadline)`
+- `std::vector<MCPToolBinding> MCPToolAdapter::adaptTools(...)`
+- `void MCPToolAdapter::registerBindings(...)` / `unregisterBindings(...)`
+- `void ToolRegistry::unregisterTool(const std::string&)` / `void unregisterTools(const std::vector<std::string>&)`
+
+### 3. 契约
+
+- `AISDK_BUILD_MCP` 默认 `ON` 并创建独立 `ai_sdk_mcp`；依赖只能是 `ai_sdk_mcp -> ai_sdk`。`AIClient` 不包含 MCP 头、不持有连接，也不自动执行远端工具。
+- 一个 `MCPClient` 绑定一个 Server 和一个逻辑会话，最多一个用户公开操作在途；Listener、通知、状态读取和 `close()` 不占该槽。并行调用由上层使用多个 Client 或 Pool。
+- stdio 只接受绝对真实可执行文件与参数数组，不经过 Shell；默认不继承父环境。stderr 始终被排空，显式回调在内部线程运行且必须非阻塞、自行脱敏，异常不能改变协议结果。
+- Streamable HTTP 实现 MCP `2025-11-25`：POST JSON/SSE、初始化后的 GET SSE、405 降级、Session/DELETE 和带 Event ID 的有限恢复。恢复只发送 `GET + Last-Event-ID`，禁止重放原 POST。
+- 生产 HTTP 只允许 HTTPS；开发明文只允许显式字面量回环地址。每个物理 Session 强制证书链与主机名校验、空代理、禁重定向；生产配置不提供自定义 CA、mTLS、代理或关闭校验入口。
+- `MCPTransportRequestContext::operation_deadline` 是公开操作的单调绝对上限；`deadline` 在准备阶段等于该上限，在 `commitPrepared()` 成功提交时改为 `request_deadline`。因此凭据获取不消耗普通请求段，而 JSON/stdio 请求段从原子提交开始。
+- `prepareMessage()` 不执行网络或进程 I/O，`commitPrepared()` 只在 Client 状态和 Catalog 代次复核后原子提交。POST SSE 只有在成功校验 `2xx + text/event-stream` 响应头后，Client 才把等待从 `request_deadline` 切换到 `operation_deadline`；之后由 SSE 空闲超时与绝对上限共同约束。工具请求提交后若无终局响应，必须返回 `OutcomeUnknown` 并保留根因与 `mayHaveExecuted=true`。
+- `MCPToolCatalog` 由 Client 私有令牌和单调代次签发；`tools/list_changed` 或 Listener 安全空档使旧 Catalog/Binding 失效。上层必须显式注销、重新列举、审核和绑定。
+- `MCPToolCallResult` 无损保存协议结果；Adapter 只接受文本和对象 `structuredContent`，富媒体返回固定失败。所有远端工具默认高风险，Server annotations 不能自动降低风险。
+
+### 4. 校验与错误矩阵
+
+| 条件 | 行为 |
+| --- | --- |
+| 相对 stdio 路径、Shell 脚本、参数控制字节 | 构造期 `std::invalid_argument`，不启动进程 |
+| 非 HTTPS 远端、`localhost` 或非回环明文地址 | 构造期 `std::invalid_argument`，不发网络请求 |
+| 第二个公开操作同时进入 | `MCPException(ClientBusy)`，不排队 |
+| 版本不匹配或缺少 Tools 能力 | `VersionMismatch` / `CapabilityMissing`，Client 进入故障态 |
+| 旧 Catalog、伪造 Catalog 或目录变化竞态 | `ToolCatalogStale`，工具请求零提交 |
+| 会话建立后的 POST/GET 返回 404 | `SessionExpired`；已提交工具提升为 `OutcomeUnknown(cause=SessionExpired)` |
+| 已提交工具的传输、超时或协议终局丢失 | `OutcomeUnknown`，禁止自动重试 |
+| 准备阶段耗尽公开绝对上限 | `MCPException(RequestTimeout)`，零提交 |
+| POST SSE 建流后超过短请求段 | 保持等待直到终局、SSE 空闲超时或公开绝对上限 |
+| GET Listener 返回 405 | `Ready + Unsupported`，其他 MCP 功能继续可用 |
+| TLS 证书链或主机名校验失败 | `TransportFailure`，不得用关闭校验逃生 |
+
+### 5. Good / Base / Bad
+
+- Good：应用持有 Client，列举后按白名单选择远端工具，显式设置别名和风险，再注册 Binding；目录变化时先注销再重新绑定。
+- Base：单个 stdio Server、单个同步工具调用、显式 `close()`，不依赖 `AIClient` 或模型 API。
+- Bad：把 MCP 连接塞进 `AIClient`、自动注册 Server 全量工具，或在 POST SSE 断线后重放可能有副作用的 `tools/call`。
+
+### 6. 必要测试
+
+- `ai_sdk_mcp_test`：类型、配置、协议、SSE、Client 状态机、Catalog、OutcomeUnknown 与 Adapter 正常/边界/错误路径。
+- `ai_sdk_mcp_stdio_test`：真实无 Shell 子进程、Unicode/空格 argv/路径/环境、stderr、提前退出、EOF 与进程树回收。
+- `ai_sdk_mcp_http_test`：真实回环 POST JSON/SSE、GET/405、Session/404、凭据、代理陷阱、Event-ID 恢复和 TLS 三项对照。
+- 计时回归必须让 POST SSE 先只发送合法响应头，在超过 `request_timeout` 后释放终局事件，并断言调用成功且仍受 `absolute_request_timeout` 限制。
+- MCP 开启时 CTest 必须精确列出上述三项并带 `mcp` 标签；关闭时精确为零，编译数据库和 Ninja 图中不得出现 MCP 源或目标。
+
+### 7. 错误写法 vs 正确写法
+
+#### 错误写法
+
+```cpp
+// 错误：绕过审批自动注册全部远端工具，并隐式延长连接生命周期。
+for(const auto& tool : client->listTools().tools()) {
+    client_ai.tools().registerTool(convert(tool), makeRemoteHandler(client, tool));
+}
+```
+
+#### 正确写法
+
+```cpp
+const MCPToolCatalog catalog = client->listTools();
+const auto bindings = MCPToolAdapter::adaptTools(
+    client, catalog, {{"approved_remote_name", "local_alias", ToolRiskLevel::High}});
+MCPToolAdapter::registerBindings(registry, bindings);
+// 目录失效或关闭前由上层显式 unregisterBindings(...) 与 close()。
+```

@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/sdk-contracts.md","reason":"约束 MCP 作为独立可选目标，不修改 AIClient 所有权与既有公开合同"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"统一配置、生命周期、协议、传输与 ToolResult 的分层错误表达"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"落实中文注释率、分层测试、跨平台构建与本地验证质量门"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"保持公共 MCP 头、内部协议、平台进程与测试目录职责边界"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"核对 Client、Transport、Tool Adapter、构建和示例的端到端集成点"}

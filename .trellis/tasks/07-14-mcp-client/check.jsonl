@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/sdk-contracts.md","reason":"检查 MCP 可选目标、AIClient 边界、ToolRegistry 注销与公开 API 合同"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"检查生命周期、传输、协议、结果未知与脱敏错误的闭合映射"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"检查本地构建测试、中文注释率、UTF-8 无 BOM 与格式化门禁"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"检查 MCP 公共头、内部实现、平台进程层、测试和示例目录边界"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"检查凭据、会话、游标、Server 正文与进程参数不会进入日志或公开错误"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"检查 Client、Transport、Tool Adapter、CMake、文档与示例的跨层数据流"}

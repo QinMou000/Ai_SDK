@@ -18,6 +18,14 @@ class ToolRegistry {
     // 参数非法时抛出 std::invalid_argument，避免留下不可执行的半成品。
     void registerTool(const Tool& tool, ToolHandler handler);
 
+    // unregisterTool 从定义、处理函数和展示顺序中同步移除指定工具。
+    // 未知名称按幂等清理处理；空名称属于调用方错误并抛出 std::invalid_argument。
+    void unregisterTool(const std::string& name);
+    // unregisterTools 在修改状态前校验整批名称，避免非法输入造成部分注销。
+    // 空批次不执行任何操作；空名称或重复名称抛出 std::invalid_argument，
+    // 未知名称不报错。注销后的同名工具再次注册时会追加到新的展示位置。
+    void unregisterTools(const std::vector<std::string>& names);
+
     // hasTool 只查询定义是否存在，不执行处理函数，也不会抛出未知工具异常。
     bool hasTool(const std::string& name) const;
     // getTool 返回一份工具定义副本；名称未知时抛出 std::out_of_range。

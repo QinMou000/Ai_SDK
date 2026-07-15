@@ -12,6 +12,7 @@
 - 测试框架：GTest，入口在 `tests/CMakeLists.txt`。
 - 示例构建：由 `AISDK_BUILD_EXAMPLES` 控制。
 - 测试构建：由 `AISDK_BUILD_TESTS` 控制，默认开启。
+- MCP 构建：由 `AISDK_BUILD_MCP` 控制，默认开启并生成独立 `ai_sdk_mcp`。
 
 ## 本地验证要求
 
@@ -43,6 +44,7 @@ ctest --preset windows-debug --output-on-failure
 - `tests/smoke/`：从 SDK 门面观察的最小通路。
 - `tests/tool/`：工具注册、批量执行、异常收敛和 Tool 结果消息转换；目标名为 `ai_sdk_tool_test`。
 - `tests/trace/`：Trace 会话、并发、脱敏、JSON 与跨层确定性验证；目标名为 `ai_sdk_trace_test`。
+- `tests/mcp/`：MCP 单元、真实 stdio 与真实 HTTP/TLS；顶层 CTest 固定为 `ai_sdk_mcp_test`、`ai_sdk_mcp_stdio_test`、`ai_sdk_mcp_http_test`。
 
 ## 新增或修改代码时必须覆盖的验证点
 
@@ -53,6 +55,15 @@ ctest --preset windows-debug --output-on-failure
 - 修改 SDK 总入口或 Provider 选择：补 `tests/smoke/ai_sdk_smoke_test.cpp` 类似的最小集成断言。
 - 修改工具定义、注册表或执行器：补 `tests/tool/` 的正常、边界和错误恢复用例，并验证 `AIClient` 门面不会隐式发起网络请求。
 - 修改 Trace 或跨层埋点：补 `tests/trace/` 的关闭、成功、失败、并发、脱敏和敏感哨兵断言。
+- 修改 MCP：正常、边界、错误恢复必须同时覆盖；stdio 使用真实无 Shell 子进程，HTTP 使用真实回环 Socket，TLS 在 Windows/Linux 都执行自签名拒绝、测试 CA 正确主机成功、同 CA 错误主机拒绝三项对照。
+
+## MCP 强制本地矩阵
+
+- Windows MSVC：Debug ON 全量测试、Release ON 三项 MCP 测试、Debug OFF 核心全量测试。
+- Linux GCC：Debug ON 全量测试、Release ON 三项 MCP 测试、Debug OFF 核心全量测试。
+- 验收只能使用版本控制内 `windows-debug`、`windows-release`、`linux-debug`、`linux-release` 预设；`local-*` 只能用于开发反馈。
+- ON 时 `ctest -N -L mcp` 必须精确列出三项；OFF 时必须为零，并检查 `compile_commands.json` 与 `build.ninja` 不含 MCP 源或目标。
+- TLS、进程树回收和代理陷阱不得因平台能力不足而跳过；本机缺少 Linux/Windows 验证环境时任务保持未完成并记录阻塞，不能用远程 CI 或人工结果代替。
 
 ## 注释与编码验证
 

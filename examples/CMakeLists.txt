@@ -5,3 +5,7 @@ add_subdirectory(04_register_tool)
 add_subdirectory(05_tool_call)
 add_subdirectory(06_simple_agent)
 add_subdirectory(07_trace)
+
+if(AISDK_BUILD_MCP)
+    add_subdirectory(08_mcp_tool_call)
+endif()
