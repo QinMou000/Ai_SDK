@@ -219,7 +219,8 @@ void ensureSuccessStatus(const HttpResponse& response, const std::string& url) {
     }
 
     std::ostringstream message;
-    message << "DeepSeek API 请求失败: " << url << " | HTTP " << response.status_code << " | " << extractHttpError(response);
+    message << "DeepSeek API 请求失败: " << url << " | HTTP " << response.status_code << " | "
+            << extractHttpError(response);
     throw std::runtime_error(message.str());
 }
 
@@ -277,7 +278,8 @@ void processBufferedEvents(std::string& buffer, const SSEParser& parser, const S
 
 // 默认构造路径委托给可注入构造路径，避免生产与测试初始化规则分叉。
 // HttpClient 作为值成员固定在 Provider 生命周期内，单次请求不会切换传输实现。
-DeepSeekProvider::DeepSeekProvider(ProviderConfig config, int timeout_ms) : DeepSeekProvider(std::move(config), timeout_ms, HttpClient{}) {}
+DeepSeekProvider::DeepSeekProvider(ProviderConfig config, int timeout_ms)
+    : DeepSeekProvider(std::move(config), timeout_ms, HttpClient{}) {}
 
 // 传输注入只影响网络执行方式，不改变请求映射、响应解析或 Trace 层级。
 // 这为失败、分块和边界条件测试提供确定输入，同时保留真实 Provider 行为。
@@ -290,7 +292,8 @@ ChatResponse DeepSeekProvider::chat(const ChatRequest& request) {
     return chat(request, disabled_trace, "");
 }
 
-ChatResponse DeepSeekProvider::chat(const ChatRequest& request, TraceSession& trace_session, const std::string& parent_step_id) {
+ChatResponse DeepSeekProvider::chat(const ChatRequest& request, TraceSession& trace_session,
+                                    const std::string& parent_step_id) {
     // Provider 步骤承接 AIClient 父节点，并作为 HTTP 请求的直接父节点。
     // 步骤不可用时仍执行原业务路径，观测能力不能成为请求前置条件。
     TraceRecorder recorder(trace_session);
@@ -316,9 +319,10 @@ ChatResponse DeepSeekProvider::chat(const ChatRequest& request, TraceSession& tr
         const HttpHeaders headers = buildHeaders(config_);
         // Provider 步骤不可用时回到原 HTTP 入口，避免下层步骤成为孤立根节点。
         // 该降级路径同时防止 Trace 内部失败改变业务调用结果。
-        const HttpResponse response = provider_step.enabled()
-                                          ? http_client_.postJson(url, request_json, headers, timeout_ms_, trace_session, provider_step.stepId())
-                                          : http_client_.postJson(url, request_json, headers, timeout_ms_);
+        const HttpResponse response =
+            provider_step.enabled()
+                ? http_client_.postJson(url, request_json, headers, timeout_ms_, trace_session, provider_step.stepId())
+                : http_client_.postJson(url, request_json, headers, timeout_ms_);
         provider_step.setAttribute(TraceAttributeKey::HttpStatusCode, response.status_code);
         // HTTP 层记录传输事实，Provider 层负责解释 DeepSeek 的非成功响应。
         ensureSuccessStatus(response, url);
@@ -346,7 +350,8 @@ void DeepSeekProvider::streamChat(const ChatRequest& request, StreamCallback cal
     streamChat(request, std::move(callback), disabled_trace, "");
 }
 
-void DeepSeekProvider::streamChat(const ChatRequest& request, StreamCallback callback, TraceSession& trace_session, const std::string& parent_step_id) {
+void DeepSeekProvider::streamChat(const ChatRequest& request, StreamCallback callback, TraceSession& trace_session,
+                                  const std::string& parent_step_id) {
     // 流式 Provider 步骤覆盖请求准备、传输和最终缓冲冲刷的完整生命周期。
     // SSE 步骤仅描述协议消费，HTTP 步骤仍独立描述网络执行。
     TraceRecorder recorder(trace_session);
@@ -429,7 +434,8 @@ void DeepSeekProvider::streamChat(const ChatRequest& request, StreamCallback cal
         sse_step.setAttribute(TraceAttributeKey::DoneCount, done_count);
         sse_step.setAttribute(TraceAttributeKey::ErrorCount, error_count);
         // 总事件数由分类计数推导，避免独立累加造成口径漂移。
-        sse_step.setAttribute(TraceAttributeKey::EventCount, delta_count + tool_call_delta_count + done_count + error_count);
+        sse_step.setAttribute(TraceAttributeKey::EventCount,
+                              delta_count + tool_call_delta_count + done_count + error_count);
     };
 
     try {
@@ -451,7 +457,8 @@ void DeepSeekProvider::streamChat(const ChatRequest& request, StreamCallback cal
         const HttpResponse response =
             provider_step.enabled()
                 // Trace 可用时显式传递父节点，维持 Provider 与 HTTP 的层级关系。
-                ? http_client_.postJsonStream(url, request_json, headers, timeout_ms_, stream_callback, trace_session, provider_step.stepId())
+                ? http_client_.postJsonStream(url, request_json, headers, timeout_ms_, stream_callback, trace_session,
+                                              provider_step.stepId())
                 : http_client_.postJsonStream(url, request_json, headers, timeout_ms_, stream_callback);
 
         provider_step.setAttribute(TraceAttributeKey::HttpStatusCode, response.status_code);

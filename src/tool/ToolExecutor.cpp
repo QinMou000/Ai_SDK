@@ -20,7 +20,8 @@ std::vector<ToolExecutionResult> ToolExecutor::executeAll(const std::vector<Tool
     return executeAll(calls, disabled_trace);
 }
 
-std::vector<ToolExecutionResult> ToolExecutor::executeAll(const std::vector<ToolCall>& calls, TraceSession& trace_session) {
+std::vector<ToolExecutionResult> ToolExecutor::executeAll(const std::vector<ToolCall>& calls,
+                                                          TraceSession& trace_session) {
     // 批次步骤承载汇总状态，单工具步骤只描述对应调用，职责保持分离。
     // Recorder 借用调用方会话，使模型请求和工具执行能够出现在同一时间线中。
     TraceRecorder recorder(trace_session);

@@ -6,12 +6,7 @@
 
 namespace aiSDK {
 
-enum class StreamEventType {
-    Delta,
-    ToolCallDelta,
-    Done,
-    Error
-};
+enum class StreamEventType { Delta, ToolCallDelta, Done, Error };
 
 // StreamEvent 描述流式回调中的单个逻辑事件。
 // 目前统一承载文本增量、工具调用增量、结束事件和错误事件。

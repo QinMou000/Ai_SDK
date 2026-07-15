@@ -22,7 +22,8 @@ cpr::Header toCprHeader(const HttpHeaders& headers) {
 
 // configureSession 统一配置 URL、请求头、请求体和超时参数。
 // 普通请求和流式请求共享同一网络参数，SSL 证书校验始终开启。
-void configureSession(cpr::Session& session, const std::string& url, const nlohmann::json& body, const HttpHeaders& headers, int timeout_ms) {
+void configureSession(cpr::Session& session, const std::string& url, const nlohmann::json& body,
+                      const HttpHeaders& headers, int timeout_ms) {
     session.SetUrl(cpr::Url{url});
     session.SetHeader(toCprHeader(headers));
     session.SetBody(cpr::Body{body.dump()});
@@ -45,7 +46,8 @@ class CprHttpTransport final : public IHttpTransport {
     // 该适配器只负责执行网络 I/O 和归一化响应，不承担 Provider 语义判断。
     // 调用方可注入等价实现用于本地测试，而无需启动真实 HTTP 服务。
     // 适配器自身不接触 Trace，确保测试传输与生产传输拥有一致的观测外壳。
-    HttpResponse postJson(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers, int timeout_ms) const override {
+    HttpResponse postJson(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers,
+                          int timeout_ms) const override {
         // 会话按请求创建，避免在并发调用之间共享回调、正文或认证状态。
         // 所有安全相关配置仍集中经过 configureSession，防止两种请求模式漂移。
         cpr::Session session;
@@ -61,8 +63,8 @@ class CprHttpTransport final : public IHttpTransport {
         return http_response;
     }
 
-    HttpResponse postJsonStream(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers, int timeout_ms,
-                                HttpStreamCallback callback) const override {
+    HttpResponse postJsonStream(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers,
+                                int timeout_ms, HttpStreamCallback callback) const override {
         // 流式会话同样是单次调用对象，回调捕获的局部状态仅在 Post 期间有效。
         // 同步返回契约保证引用捕获不会越过本函数的作用域。
         cpr::Session session;
@@ -113,15 +115,18 @@ class CprHttpTransport final : public IHttpTransport {
 // 传输依赖在构造期固定，保证单次请求期间不会发生实现切换。
 // 空注入回退到生产实现，使默认构造与显式注入共享同一成员访问路径。
 // HttpClient 仍负责 Trace 契约，因此自定义传输无法绕过字段白名单。
-HttpClient::HttpClient(std::shared_ptr<IHttpTransport> transport) : transport_(transport ? std::move(transport) : std::make_shared<CprHttpTransport>()) {}
+HttpClient::HttpClient(std::shared_ptr<IHttpTransport> transport)
+    : transport_(transport ? std::move(transport) : std::make_shared<CprHttpTransport>()) {}
 
 // 普通无 Trace 请求复用同一包装逻辑，禁用句柄不会产生任何步骤分配。
-HttpResponse HttpClient::postJson(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers, int timeout_ms) const {
+HttpResponse HttpClient::postJson(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers,
+                                  int timeout_ms) const {
     TraceSession disabled_trace;
     return postJson(url, body, headers, timeout_ms, disabled_trace, "");
 }
 
-HttpResponse HttpClient::postJson(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers, int timeout_ms, TraceSession& trace_session,
+HttpResponse HttpClient::postJson(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers,
+                                  int timeout_ms, TraceSession& trace_session,
                                   const std::string& parent_step_id) const {
     // HTTP 步骤只描述本层 I/O；父标识由 Provider 传入以维持稳定的调用树。
     // 禁用或创建失败时，Scope 的空操作语义保证业务请求仍可继续执行。
@@ -160,14 +165,15 @@ HttpResponse HttpClient::postJson(const std::string& url, const nlohmann::json& 
 }
 
 // 流式无 Trace 请求仍走相同回调和异常恢复实现。
-HttpResponse HttpClient::postJsonStream(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers, int timeout_ms,
-                                        HttpStreamCallback callback) const {
+HttpResponse HttpClient::postJsonStream(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers,
+                                        int timeout_ms, HttpStreamCallback callback) const {
     TraceSession disabled_trace;
     return postJsonStream(url, body, headers, timeout_ms, std::move(callback), disabled_trace, "");
 }
 
-HttpResponse HttpClient::postJsonStream(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers, int timeout_ms,
-                                        HttpStreamCallback callback, TraceSession& trace_session, const std::string& parent_step_id) const {
+HttpResponse HttpClient::postJsonStream(const std::string& url, const nlohmann::json& body, const HttpHeaders& headers,
+                                        int timeout_ms, HttpStreamCallback callback, TraceSession& trace_session,
+                                        const std::string& parent_step_id) const {
     // 流式步骤与普通请求使用相同类型，通过白名单属性区分模式。
     // 计数状态限定在同步调用内，避免跨请求共享产生竞态。
     TraceRecorder recorder(trace_session);

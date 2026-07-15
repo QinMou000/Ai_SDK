@@ -31,7 +31,8 @@ std::vector<Tool> lowRiskTools(const ToolRegistry& registry) {
 
 // executeAllowedCalls 保留模型返回顺序，同时在 Agent 层二次拦截非 Low 工具。
 // 未知工具继续交给现有 ToolExecutor 收敛，避免复制注册表已有的错误语义。
-std::vector<ToolExecutionResult> executeAllowedCalls(AIClient& client, const std::vector<ToolCall>& calls, TraceSession* trace_session) {
+std::vector<ToolExecutionResult> executeAllowedCalls(AIClient& client, const std::vector<ToolCall>& calls,
+                                                     TraceSession* trace_session) {
     // 结果容器先按原调用数量构造，保证被拒绝和可执行调用可在同一索引空间合并。
     // 后续回填消息的顺序必须等同于模型 Tool Call 的原顺序，不能按风险分组重排。
     std::vector<ToolExecutionResult> results(calls.size());
@@ -71,7 +72,8 @@ std::vector<ToolExecutionResult> executeAllowedCalls(AIClient& client, const std
     }
 
     const std::vector<ToolExecutionResult> executable_results =
-        trace_session == nullptr ? client.executeToolCalls(executable_calls) : client.executeToolCalls(executable_calls, *trace_session);
+        trace_session == nullptr ? client.executeToolCalls(executable_calls)
+                                 : client.executeToolCalls(executable_calls, *trace_session);
     // executeToolCalls 保证输出数量与输入压缩批次一致；Agent 只负责将其还原到完整批次位置。
     // 若底层未来改变该契约，应由 ToolExecutor 层测试先发现，不能在此静默填充伪造结果。
     for(std::size_t index = 0; index < executable_indices.size(); ++index) {
@@ -83,7 +85,8 @@ std::vector<ToolExecutionResult> executeAllowedCalls(AIClient& client, const std
 
 }  // namespace
 
-SimpleAgent::SimpleAgent(AIClient& client, SimpleAgentOptions options) : client_(client), system_prompt_(std::move(options.system_prompt)) {
+SimpleAgent::SimpleAgent(AIClient& client, SimpleAgentOptions options)
+    : client_(client), system_prompt_(std::move(options.system_prompt)) {
     // 文件工具注册是可选构造行为；根目录缺失时保持纯模型与调用方自定义工具模式。
     if(options.workspace_file_tools.has_value()) {
         registerWorkspaceFileTools(client_.tools(), *options.workspace_file_tools);
@@ -125,7 +128,8 @@ AgentResult SimpleAgent::runInternal(const std::string& input, TraceSession* tra
             // 使未来注册的高风险工具默认不会泄露给 Agent 的模型上下文。
             request.tools = lowRiskTools(client_.tools());
 
-            const ChatResponse response = trace_session == nullptr ? client_.chat(request) : client_.chat(request, *trace_session);
+            const ChatResponse response =
+                trace_session == nullptr ? client_.chat(request) : client_.chat(request, *trace_session);
             // 即使 content 为空也必须保留 assistant 消息，因为它携带后续 ToolMessage 所关联的 Tool Call。
             messages.push_back(response.message);
             if(!response.hasToolCalls()) {
@@ -133,7 +137,8 @@ AgentResult SimpleAgent::runInternal(const std::string& input, TraceSession* tra
                 return AgentResult{true, response.content, ""};
             }
 
-            const std::vector<ToolExecutionResult> execution_results = executeAllowedCalls(client_, response.tool_calls, trace_session);
+            const std::vector<ToolExecutionResult> execution_results =
+                executeAllowedCalls(client_, response.tool_calls, trace_session);
             for(const ToolExecutionResult& execution : execution_results) {
                 // 无论成功、未知工具还是受策略拒绝，结果都必须绑定原 tool_call_id 回填。
                 // 模型据此决定修正参数、改用其他工具或直接给出最终说明。

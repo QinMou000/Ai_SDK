@@ -34,7 +34,8 @@ namespace aiSDK {
 // next_sequence 与追加共用 mutex，保证序号和容器顺序完全一致。
 // 会话副本和在途 Scope 共同持有该状态，任一对象销毁都不会制造悬空引用。
 struct TraceSessionState {
-    TraceSessionState(std::string id, TraceOptions trace_options) : trace_id(std::move(id)), options(std::move(trace_options)) {}
+    TraceSessionState(std::string id, TraceOptions trace_options)
+        : trace_id(std::move(id)), options(std::move(trace_options)) {}
 
     std::mutex mutex;
     std::string trace_id;
@@ -82,7 +83,8 @@ std::string generateHexId(std::size_t length) {
 // Windows 与 POSIX 的线程安全时间转换接口在这里统一封装。
 // 墙钟只用于展示和跨步骤对照，绝不参与步骤排序或超时判断。
 std::string formatUtcTimestamp(std::chrono::system_clock::time_point time_point) {
-    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(time_point.time_since_epoch()) % 1000;
+    const auto milliseconds =
+        std::chrono::duration_cast<std::chrono::milliseconds>(time_point.time_since_epoch()) % 1000;
     const std::time_t raw_time = std::chrono::system_clock::to_time_t(time_point);
     std::tm utc_time{};
 #ifdef _WIN32
@@ -98,7 +100,8 @@ std::string formatUtcTimestamp(std::chrono::system_clock::time_point time_point)
     std::ostringstream output;
     // 固定 classic locale，避免进程区域设置改变公开时间字符串。
     output.imbue(std::locale::classic());
-    output << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%S") << '.' << std::setfill('0') << std::setw(3) << milliseconds.count() << 'Z';
+    output << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%S") << '.' << std::setfill('0') << std::setw(3)
+           << milliseconds.count() << 'Z';
     return output.str();
 }
 
@@ -222,7 +225,8 @@ Trace TraceSession::snapshot() const {
         trace.steps = state_->steps;
     }
     // 序号在步骤开始时分配；排序后不受并发任务完成顺序影响。
-    std::sort(trace.steps.begin(), trace.steps.end(), [](const TraceStep& left, const TraceStep& right) { return left.sequence < right.sequence; });
+    std::sort(trace.steps.begin(), trace.steps.end(),
+              [](const TraceStep& left, const TraceStep& right) { return left.sequence < right.sequence; });
     return trace;
 }
 
@@ -243,7 +247,11 @@ nlohmann::json TraceSession::toJson() const {
 // finished_ 设为 false 后，当前对象承担且只承担一次结束责任。
 TraceStepScope::TraceStepScope(std::shared_ptr<TraceSessionState> state, std::string step_id, std::size_t step_index,
                                std::chrono::steady_clock::time_point started_steady) noexcept
-    : state_(std::move(state)), step_id_(std::move(step_id)), step_index_(step_index), started_steady_(started_steady), finished_(false) {}
+    : state_(std::move(state)),
+      step_id_(std::move(step_id)),
+      step_index_(step_index),
+      started_steady_(started_steady),
+      finished_(false) {}
 
 // 析构兜底只用于漏掉显式结束或异常离开作用域的路径。
 // 固定摘要不读取当前异常，因此不会把业务数据复制进 Trace。
@@ -326,7 +334,8 @@ void TraceStepScope::setAttributeJson(TraceAttributeKey key, nlohmann::json valu
 // 详情处理分成“锁外脱敏”和“锁内保存”两个阶段。
 // 这样调用方回调可以安全读取快照，也不会长时间阻塞其他步骤更新。
 // raw_value 的生命周期只覆盖本次调用，任何路径都不会把它放入共享状态。
-void TraceStepScope::setSanitizedDetail(TraceDetailSlot slot, const TraceDetailContext& context, const nlohmann::json& raw_value) noexcept {
+void TraceStepScope::setSanitizedDetail(TraceDetailSlot slot, const TraceDetailContext& context,
+                                        const nlohmann::json& raw_value) noexcept {
     if(!wantsDetails() || !matchesDetailSlot(slot, context.kind)) {
         return;
     }
@@ -365,7 +374,8 @@ void TraceStepScope::setSanitizedDetail(TraceDetailSlot slot, const TraceDetailC
     }
     try {
         std::lock_guard<std::mutex> lock(state_->mutex);
-        if(TraceStep* step = findStepLocked(*state_, step_index_, step_id_); step && step->status == TraceStepStatus::Running) {
+        if(TraceStep* step = findStepLocked(*state_, step_index_, step_id_);
+           step && step->status == TraceStepStatus::Running) {
             step->details[traceDetailSlotToString(slot)] = std::move(detail_entry);
         }
     } catch(...) {
@@ -401,7 +411,8 @@ void TraceStepScope::finish(TraceStepStatus status, TraceFailure failure) noexce
     // 先关闭本地状态，保证即使后续 Trace 更新失败也不会在析构时重复写入。
     finished_ = true;
     const auto elapsed = std::chrono::steady_clock::now() - started_steady_;
-    const long long duration_ms = std::max<long long>(0, std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+    const long long duration_ms =
+        std::max<long long>(0, std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
 
     try {
         // 摘要先在锁外完成分配，再以移动方式与其他字段一起提交。

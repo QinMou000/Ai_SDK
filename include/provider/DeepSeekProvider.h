@@ -21,11 +21,13 @@ class DeepSeekProvider : public IModelProvider {
     // chat 发起一次真实的非流式 Chat Completion 请求。
     ChatResponse chat(const ChatRequest& request) override;
     // Trace 重载记录 Provider、HTTP 与统一模型请求之间的显式父子关系。
-    ChatResponse chat(const ChatRequest& request, TraceSession& trace_session, const std::string& parent_step_id) override;
+    ChatResponse chat(const ChatRequest& request, TraceSession& trace_session,
+                      const std::string& parent_step_id) override;
     // streamChat 发起真实的流式请求，并按 SSE 事件持续回调增量结果。
     void streamChat(const ChatRequest& request, StreamCallback callback) override;
     // 流式 Trace 只记录聚合计数，不保存逐 token 文本或原始 SSE 字节。
-    void streamChat(const ChatRequest& request, StreamCallback callback, TraceSession& trace_session, const std::string& parent_step_id) override;
+    void streamChat(const ChatRequest& request, StreamCallback callback, TraceSession& trace_session,
+                    const std::string& parent_step_id) override;
     // info 暴露 DeepSeek 的名称、默认模型和能力标识。
     ProviderInfo info() const override;
 

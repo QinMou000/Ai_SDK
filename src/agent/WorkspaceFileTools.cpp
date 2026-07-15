@@ -114,7 +114,8 @@ struct WorkspaceContext {
 // 返回新字符串而非修改 path，保证后续 canonical、显示和实际 I/O 仍使用原始路径对象。
 // lowerAscii 只用于文件名策略匹配，路径本身仍保留操作系统原有大小写。
 std::string lowerAscii(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
     return value;
 }
 
@@ -161,8 +162,8 @@ bool isSensitivePath(const fs::path& root, const fs::path& candidate) {
     }
 
     const std::string filename = lowerAscii(candidate.filename().string());
-    return filename == "id_rsa" || filename == "id_ed25519" || hasSuffix(filename, ".pem") || hasSuffix(filename, ".key") || hasSuffix(filename, ".pfx") ||
-           hasSuffix(filename, ".p12");
+    return filename == "id_rsa" || filename == "id_ed25519" || hasSuffix(filename, ".pem") ||
+           hasSuffix(filename, ".key") || hasSuffix(filename, ".pfx") || hasSuffix(filename, ".p12");
 }
 
 std::string requiredString(const nlohmann::json& arguments, const char* key) {
@@ -249,7 +250,8 @@ fs::path resolveExistingPath(const WorkspaceContext& context, const std::string&
     }
     requireSafePath(context, normalized);
 
-    const bool expected_type = expect_directory ? fs::is_directory(normalized, error) : fs::is_regular_file(normalized, error);
+    const bool expected_type =
+        expect_directory ? fs::is_directory(normalized, error) : fs::is_regular_file(normalized, error);
     if(error || !expected_type) {
         throw std::runtime_error(expect_directory ? "目标不是目录: " + raw_path : "目标不是普通文件: " + raw_path);
     }
@@ -318,8 +320,8 @@ bool isValidUtf8(const std::string& value) {
             return false;
         }
         const unsigned char second = static_cast<unsigned char>(value[index + 1U]);
-        if((first == 0xE0U && second < 0xA0U) || (first == 0xEDU && second > 0x9FU) || (first == 0xF0U && second < 0x90U) ||
-           (first == 0xF4U && second > 0x8FU)) {
+        if((first == 0xE0U && second < 0xA0U) || (first == 0xEDU && second > 0x9FU) ||
+           (first == 0xF0U && second < 0x90U) || (first == 0xF4U && second > 0x8FU)) {
             return false;
         }
         for(std::size_t offset = 1U; offset <= continuation_count; ++offset) {
@@ -421,160 +423,168 @@ void registerWorkspaceFileTools(ToolRegistry& registry, const WorkspaceFileToolO
     }
 
     // 所有 handler 以值捕获不可变工作区上下文；注册完成后外部不能修改其根目录或大小限制。
-    registry.registerTool(makeTool("list_directory", "列出工作区内指定目录的单层文件和目录，不会递归访问或显示受保护条目。",
-                                   nlohmann::json{
-                                       {"type",                 "object"                                                                                                         },
-                                       {"properties",           {{"path", {{"type", "string"}, {"description", "工作区内的相对目录路径，省略时表示根目录"}}}}},
-                                       {"additionalProperties", false                                                                                                            }
+    registry.registerTool(
+        makeTool("list_directory", "列出工作区内指定目录的单层文件和目录，不会递归访问或显示受保护条目。",
+                 nlohmann::json{
+                     {"type",                 "object"                                                                                 },
+                     {"properties",
+                      {{"path", {{"type", "string"}, {"description", "工作区内的相对目录路径，省略时表示根目录"}}}}},
+                     {"additionalProperties", false                                                                                    }
     }),
-                          [context](const nlohmann::json& arguments) {
-                              // 仅 path 是可选字段；缺失时 resolveExistingPath 将受控地解析为授权根目录。
-                              const fs::path directory = resolveExistingPath(context, optionalString(arguments, "path"), true);
-                              std::vector<nlohmann::json> entries;
-                              std::error_code error;
-                              for(const fs::directory_entry& entry : fs::directory_iterator(directory, error)) {
-                                  // 迭代器错误可能在构造后才出现，循环内必须再次检查而不能假定目录快照稳定。
-                                  if(error) {
-                                      throw std::runtime_error("遍历目录失败: " + directory.string());
-                                  }
-                                  if(entry.is_symlink(error)) {
-                                      // 不显示链接条目使模型不会把它们当作可继续读取的工作区文件。
-                                      error.clear();
-                                      continue;
-                                  }
-                                  if(error) {
-                                      throw std::runtime_error("读取目录条目失败: " + directory.string());
-                                  }
-                                  // Windows 目录联接点不一定被 is_symlink 标识；必须再规范化实际目标，
-                                  // 否则列举结果会把工作区外目录伪装成后续可读取的本地条目。
-                                  const fs::path normalized_entry = fs::canonical(entry.path(), error);
-                                  if(error) {
-                                      // 无法解析的重解析点或并发删除条目不进入模型上下文，避免泄露不稳定路径。
-                                      error.clear();
-                                      continue;
-                                  }
-                                  if(!isWithinRoot(context.root, normalized_entry) || isSensitivePath(context.root, normalized_entry)) {
-                                      // 最终目标越界或敏感时静默隐藏；列表不会把外部位置作为可探索目录提示给模型。
-                                      continue;
-                                  }
-                                  if(isSensitivePath(context.root, entry.path())) {
-                                      // 敏感条目连名称也不返回，避免目录结果成为环境配置存在性的侧信道。
-                                      continue;
-                                  }
-                                  if(entries.size() >= context.max_directory_entries) {
-                                      // 超限整体失败而不是静默截断，模型可明确选择更小的已知子目录。
-                                      throw std::runtime_error("目录条目数量超过工作区工具限制");
-                                  }
+        [context](const nlohmann::json& arguments) {
+            // 仅 path 是可选字段；缺失时 resolveExistingPath 将受控地解析为授权根目录。
+            const fs::path directory = resolveExistingPath(context, optionalString(arguments, "path"), true);
+            std::vector<nlohmann::json> entries;
+            std::error_code error;
+            for(const fs::directory_entry& entry : fs::directory_iterator(directory, error)) {
+                // 迭代器错误可能在构造后才出现，循环内必须再次检查而不能假定目录快照稳定。
+                if(error) {
+                    throw std::runtime_error("遍历目录失败: " + directory.string());
+                }
+                if(entry.is_symlink(error)) {
+                    // 不显示链接条目使模型不会把它们当作可继续读取的工作区文件。
+                    error.clear();
+                    continue;
+                }
+                if(error) {
+                    throw std::runtime_error("读取目录条目失败: " + directory.string());
+                }
+                // Windows 目录联接点不一定被 is_symlink 标识；必须再规范化实际目标，
+                // 否则列举结果会把工作区外目录伪装成后续可读取的本地条目。
+                const fs::path normalized_entry = fs::canonical(entry.path(), error);
+                if(error) {
+                    // 无法解析的重解析点或并发删除条目不进入模型上下文，避免泄露不稳定路径。
+                    error.clear();
+                    continue;
+                }
+                if(!isWithinRoot(context.root, normalized_entry) || isSensitivePath(context.root, normalized_entry)) {
+                    // 最终目标越界或敏感时静默隐藏；列表不会把外部位置作为可探索目录提示给模型。
+                    continue;
+                }
+                if(isSensitivePath(context.root, entry.path())) {
+                    // 敏感条目连名称也不返回，避免目录结果成为环境配置存在性的侧信道。
+                    continue;
+                }
+                if(entries.size() >= context.max_directory_entries) {
+                    // 超限整体失败而不是静默截断，模型可明确选择更小的已知子目录。
+                    throw std::runtime_error("目录条目数量超过工作区工具限制");
+                }
 
-                                  const bool is_directory = fs::is_directory(normalized_entry, error);
-                                  if(error) {
-                                      throw std::runtime_error("读取目录条目类型失败: " + entry.path().string());
-                                  }
-                                  entries.push_back({
-                                      {"path", relativeDisplayPath(context, entry.path())},
-                                      {"type", is_directory ? "directory" : "file"},
-                                  });
-                              }
-                              std::sort(entries.begin(), entries.end(), [](const nlohmann::json& left, const nlohmann::json& right) {
-                                  // 排序键仅使用已脱离绝对根的 display path，不比较文件系统本地化名称元数据。
-                                  return left.at("path").get<std::string>() < right.at("path").get<std::string>();
-                              });
-                              return ToolResult::successResult({
-                                  {"path", relativeDisplayPath(context, directory)},
-                                  {"entries", entries},
-                              });
-                          });
+                const bool is_directory = fs::is_directory(normalized_entry, error);
+                if(error) {
+                    throw std::runtime_error("读取目录条目类型失败: " + entry.path().string());
+                }
+                entries.push_back({
+                    {"path", relativeDisplayPath(context, entry.path())},
+                    {"type", is_directory ? "directory" : "file"},
+                });
+            }
+            std::sort(entries.begin(), entries.end(), [](const nlohmann::json& left, const nlohmann::json& right) {
+                // 排序键仅使用已脱离绝对根的 display path，不比较文件系统本地化名称元数据。
+                return left.at("path").get<std::string>() < right.at("path").get<std::string>();
+            });
+            return ToolResult::successResult({
+                {"path", relativeDisplayPath(context, directory)},
+                {"entries", entries},
+            });
+        });
 
-    registry.registerTool(makeTool("read_text_file", "读取工作区内一个受配置大小限制的 UTF-8 文本文件。",
-                                   nlohmann::json{
-                                       {"type",                 "object"                                                                              },
-                                       {"properties",           {{"path", {{"type", "string"}, {"description", "工作区内的相对文件路径"}}}}},
-                                       {"required",             {"path"}                                                                              },
-                                       {"additionalProperties", false                                                                                 }
+    registry.registerTool(
+        makeTool("read_text_file", "读取工作区内一个受配置大小限制的 UTF-8 文本文件。",
+                 nlohmann::json{
+                     {"type",                 "object"                                                                              },
+                     {"properties",           {{"path", {{"type", "string"}, {"description", "工作区内的相对文件路径"}}}}},
+                     {"required",             {"path"}                                                                              },
+                     {"additionalProperties", false                                                                                 }
     }),
-                          [context](const nlohmann::json& arguments) {
-                              // read 只接受普通文件；目录、链接和不存在对象均在 resolveExistingPath 处失败。
-                              const fs::path path = resolveExistingPath(context, requiredString(arguments, "path"), false);
-                              const std::string content = readUtf8TextFile(context, path);
-                              return ToolResult::successResult({
-                                  {"path", relativeDisplayPath(context, path)},
-                                  {"content", content},
-                              });
-                          });
+        [context](const nlohmann::json& arguments) {
+            // read 只接受普通文件；目录、链接和不存在对象均在 resolveExistingPath 处失败。
+            const fs::path path = resolveExistingPath(context, requiredString(arguments, "path"), false);
+            const std::string content = readUtf8TextFile(context, path);
+            return ToolResult::successResult({
+                {"path", relativeDisplayPath(context, path)},
+                {"content", content},
+            });
+        });
 
-    registry.registerTool(makeTool("create_text_file", "在工作区内新建一个不存在的 UTF-8 文本文件，不会覆盖已有文件。",
-                                   nlohmann::json{
-                                       {"type",                 "object"                                                           },
-                                       {"properties",           {{"path", {{"type", "string"}}}, {"content", {{"type", "string"}}}}},
-                                       {"required",             {"path", "content"}                                                },
-                                       {"additionalProperties", false                                                              }
+    registry.registerTool(
+        makeTool("create_text_file", "在工作区内新建一个不存在的 UTF-8 文本文件，不会覆盖已有文件。",
+                 nlohmann::json{
+                     {"type",                 "object"                                                           },
+                     {"properties",           {{"path", {{"type", "string"}}}, {"content", {{"type", "string"}}}}},
+                     {"required",             {"path", "content"}                                                },
+                     {"additionalProperties", false                                                              }
     }),
-                          [context](const nlohmann::json& arguments) {
-                              // create 在写入前检查目标不存在，保证同名文件不会被本工具隐式截断。
-                              const fs::path path = resolveNewPath(context, requiredString(arguments, "path"));
-                              const std::string content = requiredString(arguments, "content");
-                              writeUtf8TextFile(context, path, content);
-                              return ToolResult::successResult({
-                                  {"path", relativeDisplayPath(context, path)},
-                                  {"bytes", content.size()},
-                                  {"action", "created"},
-                              });
-                          });
+        [context](const nlohmann::json& arguments) {
+            // create 在写入前检查目标不存在，保证同名文件不会被本工具隐式截断。
+            const fs::path path = resolveNewPath(context, requiredString(arguments, "path"));
+            const std::string content = requiredString(arguments, "content");
+            writeUtf8TextFile(context, path, content);
+            return ToolResult::successResult({
+                {"path", relativeDisplayPath(context, path)},
+                {"bytes", content.size()},
+                {"action", "created"},
+            });
+        });
 
-    registry.registerTool(makeTool("write_text_file", "覆盖工作区内一个已经存在的 UTF-8 文本文件，不会隐式新建文件。",
-                                   nlohmann::json{
-                                       {"type",                 "object"                                                           },
-                                       {"properties",           {{"path", {{"type", "string"}}}, {"content", {{"type", "string"}}}}},
-                                       {"required",             {"path", "content"}                                                },
-                                       {"additionalProperties", false                                                              }
+    registry.registerTool(
+        makeTool("write_text_file", "覆盖工作区内一个已经存在的 UTF-8 文本文件，不会隐式新建文件。",
+                 nlohmann::json{
+                     {"type",                 "object"                                                           },
+                     {"properties",           {{"path", {{"type", "string"}}}, {"content", {{"type", "string"}}}}},
+                     {"required",             {"path", "content"}                                                },
+                     {"additionalProperties", false                                                              }
     }),
-                          [context](const nlohmann::json& arguments) {
-                              // write 复用已有路径解析，明确要求调用方先知道目标已经存在。
-                              const fs::path path = resolveExistingPath(context, requiredString(arguments, "path"), false);
-                              const std::string content = requiredString(arguments, "content");
-                              writeUtf8TextFile(context, path, content);
-                              return ToolResult::successResult({
-                                  {"path", relativeDisplayPath(context, path)},
-                                  {"bytes", content.size()},
-                                  {"action", "written"},
-                              });
-                          });
+        [context](const nlohmann::json& arguments) {
+            // write 复用已有路径解析，明确要求调用方先知道目标已经存在。
+            const fs::path path = resolveExistingPath(context, requiredString(arguments, "path"), false);
+            const std::string content = requiredString(arguments, "content");
+            writeUtf8TextFile(context, path, content);
+            return ToolResult::successResult({
+                {"path", relativeDisplayPath(context, path)},
+                {"bytes", content.size()},
+                {"action", "written"},
+            });
+        });
 
-    registry.registerTool(makeTool("replace_text_in_file", "在工作区内 UTF-8 文本文件中精确替换唯一的一处文本；零处或多处匹配都会失败。",
-                                   nlohmann::json{
-                                       {"type",                 "object"                                                                                             },
-                                       {"properties",           {{"path", {{"type", "string"}}}, {"search", {{"type", "string"}}}, {"replace", {{"type", "string"}}}}},
-                                       {"required",             {"path", "search", "replace"}                                                                        },
-                                       {"additionalProperties", false                                                                                                }
+    registry.registerTool(
+        makeTool(
+            "replace_text_in_file", "在工作区内 UTF-8 文本文件中精确替换唯一的一处文本；零处或多处匹配都会失败。",
+            nlohmann::json{
+                {"type",                 "object"                                                                     },
+                {"properties",
+                 {{"path", {{"type", "string"}}}, {"search", {{"type", "string"}}}, {"replace", {{"type", "string"}}}}},
+                {"required",             {"path", "search", "replace"}                                                },
+                {"additionalProperties", false                                                                        }
     }),
-                          [context](const nlohmann::json& arguments) {
-                              // replace 先完整读取再校验匹配数，任何不确定匹配都不会触发文件写入。
-                              const fs::path path = resolveExistingPath(context, requiredString(arguments, "path"), false);
-                              const std::string search = requiredString(arguments, "search");
-                              const std::string replacement = requiredString(arguments, "replace");
-                              if(search.empty()) {
-                                  throw std::invalid_argument("替换文本不能为空");
-                              }
+        [context](const nlohmann::json& arguments) {
+            // replace 先完整读取再校验匹配数，任何不确定匹配都不会触发文件写入。
+            const fs::path path = resolveExistingPath(context, requiredString(arguments, "path"), false);
+            const std::string search = requiredString(arguments, "search");
+            const std::string replacement = requiredString(arguments, "replace");
+            if(search.empty()) {
+                throw std::invalid_argument("替换文本不能为空");
+            }
 
-                              std::string content = readUtf8TextFile(context, path);
-                              const std::size_t first_match = content.find(search);
-                              // npos 是零匹配；该情况不等同于创建或追加，必须保留为可恢复失败。
-                              if(first_match == std::string::npos) {
-                                  throw std::runtime_error("文件中未找到待替换文本");
-                              }
-                              if(content.find(search, first_match + search.size()) != std::string::npos) {
-                                  // 多处命中代表模型没有指定唯一位置；首版拒绝而不是选择第一处避免误改。
-                                  throw std::runtime_error("待替换文本匹配多处，拒绝修改文件");
-                              }
-                              content.replace(first_match, search.size(), replacement);
-                              // 内容替换后仍通过统一写入 helper，编码和大小预算不会因 replace 路径被绕过。
-                              writeUtf8TextFile(context, path, content);
-                              return ToolResult::successResult({
-                                  {"path", relativeDisplayPath(context, path)},
-                                  {"bytes", content.size()},
-                                  {"action", "replaced"},
-                              });
-                          });
+            std::string content = readUtf8TextFile(context, path);
+            const std::size_t first_match = content.find(search);
+            // npos 是零匹配；该情况不等同于创建或追加，必须保留为可恢复失败。
+            if(first_match == std::string::npos) {
+                throw std::runtime_error("文件中未找到待替换文本");
+            }
+            if(content.find(search, first_match + search.size()) != std::string::npos) {
+                // 多处命中代表模型没有指定唯一位置；首版拒绝而不是选择第一处避免误改。
+                throw std::runtime_error("待替换文本匹配多处，拒绝修改文件");
+            }
+            content.replace(first_match, search.size(), replacement);
+            // 内容替换后仍通过统一写入 helper，编码和大小预算不会因 replace 路径被绕过。
+            writeUtf8TextFile(context, path, content);
+            return ToolResult::successResult({
+                {"path", relativeDisplayPath(context, path)},
+                {"bytes", content.size()},
+                {"action", "replaced"},
+            });
+        });
 }
 
 }  // namespace aiSDK

@@ -314,7 +314,8 @@ const char* traceFailureToSummary(TraceFailure failure) noexcept {
 // JSON 对象键顺序不作为契约，字段名称和类型才是稳定边界。
 nlohmann::json traceStepToJson(const TraceStep& step) {
     // parent_step_id 始终导出；根步骤使用 null，避免调用方猜测字段是否缺失。
-    const nlohmann::json parent_step_id = step.parent_step_id.has_value() ? nlohmann::json(*step.parent_step_id) : nlohmann::json(nullptr);
+    const nlohmann::json parent_step_id =
+        step.parent_step_id.has_value() ? nlohmann::json(*step.parent_step_id) : nlohmann::json(nullptr);
 
     return nlohmann::json{
         {"step_id",        step.step_id                        },

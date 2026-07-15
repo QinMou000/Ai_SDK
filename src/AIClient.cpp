@@ -105,8 +105,9 @@ ChatResponse AIClient::chat(const ChatRequest& request, TraceSession& trace_sess
     try {
         // 仅在根步骤有效时传递父 ID，确保成功链路具有单一、稳定的根节点。
         // 根步骤创建失败时不继续创建无父节点的下层步骤，业务请求仍照常执行。
-        ChatResponse response =
-            request_step.enabled() ? active_provider_->chat(request, trace_session, request_step.stepId()) : active_provider_->chat(request);
+        ChatResponse response = request_step.enabled()
+                                    ? active_provider_->chat(request, trace_session, request_step.stepId())
+                                    : active_provider_->chat(request);
         if(request_step.enabled()) {
             // 响应统计在 Provider 返回后统一写入，失败请求不会留下伪造的用量数据。
             // 工具调用仅记录数量；名称、参数和结果由后续工具执行步骤按策略处理。
@@ -220,7 +221,8 @@ std::vector<ToolExecutionResult> AIClient::executeToolCalls(const std::vector<To
     return executor.executeAll(calls);
 }
 
-std::vector<ToolExecutionResult> AIClient::executeToolCalls(const std::vector<ToolCall>& calls, TraceSession& trace_session) {
+std::vector<ToolExecutionResult> AIClient::executeToolCalls(const std::vector<ToolCall>& calls,
+                                                            TraceSession& trace_session) {
     // 总开关关闭时复用原入口，确保外部启用会话也不能产生工具 Trace。
     // 开关仅控制观测能力，工具注册表和结果顺序不受会话状态影响。
     if(!config_.enable_trace) {

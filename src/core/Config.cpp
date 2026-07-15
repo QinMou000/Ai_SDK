@@ -27,8 +27,7 @@ std::string trimWhitespace(std::string text) {
 // removeUtf8Bom 兼容某些编辑器保存出的 UTF-8 BOM 文件，避免首行 key 带上不可见字符。
 std::string removeUtf8Bom(std::string text) {
     if(text.size() >= 3U && static_cast<unsigned char>(text[0]) == 0xEF &&
-       static_cast<unsigned char>(text[1]) == 0xBB &&
-       static_cast<unsigned char>(text[2]) == 0xBF) {
+       static_cast<unsigned char>(text[1]) == 0xBB && static_cast<unsigned char>(text[2]) == 0xBF) {
         return text.substr(3);
     }
 
@@ -137,9 +136,7 @@ bool loadEnvFile(const std::filesystem::path& path, bool overwrite) {
     return true;
 }
 
-bool loadNearestEnvFile(const std::filesystem::path& start_directory,
-                        const std::string& filename,
-                        bool overwrite) {
+bool loadNearestEnvFile(const std::filesystem::path& start_directory, const std::string& filename, bool overwrite) {
     std::filesystem::path current = start_directory;
     if(current.empty()) {
         current = std::filesystem::current_path();
