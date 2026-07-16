@@ -1,6 +1,8 @@
 #include "http/SSEParser.h"
 
+#include <limits>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <sstream>
 #include <string>
 
@@ -19,6 +21,88 @@ std::string jsonStringOrEmpty(const nlohmann::json& json, const char* key) {
     }
 
     return json.at(key).get<std::string>();
+}
+
+// readOptionalString 仅接受字符串、null 或字段缺失，拒绝协议中不应出现的其他类型。
+// 工具调用分片会跨多个事件到达，必须保留“本次没有该字段”和“字段格式错误”的区别。
+bool readOptionalString(const nlohmann::json& json, const char* key, std::optional<std::string>& value) {
+    if(!json.contains(key) || json.at(key).is_null()) {
+        return true;
+    }
+
+    if(!json.at(key).is_string()) {
+        return false;
+    }
+
+    value = json.at(key).get<std::string>();
+    return true;
+}
+
+// readToolCallIndex 校验供应商协议中的数组位置，避免负数或浮点数被静默转换为容器下标。
+// Agent 后续按该下标聚合分片，因此这里必须在协议边界拒绝不确定的索引。
+bool readToolCallIndex(const nlohmann::json& json, std::size_t& index) {
+    if(!json.contains("index")) {
+        return false;
+    }
+
+    const nlohmann::json& raw_index = json.at("index");
+    if(raw_index.is_number_unsigned()) {
+        const auto value = raw_index.get<nlohmann::json::number_unsigned_t>();
+        if(value > static_cast<nlohmann::json::number_unsigned_t>(std::numeric_limits<std::size_t>::max())) {
+            return false;
+        }
+        index = static_cast<std::size_t>(value);
+        return true;
+    }
+
+    if(raw_index.is_number_integer()) {
+        const auto value = raw_index.get<nlohmann::json::number_integer_t>();
+        if(value < 0 || static_cast<nlohmann::json::number_unsigned_t>(value) >
+                            static_cast<nlohmann::json::number_unsigned_t>(std::numeric_limits<std::size_t>::max())) {
+            return false;
+        }
+        index = static_cast<std::size_t>(value);
+        return true;
+    }
+
+    return false;
+}
+
+// parseToolCallDeltas 将供应商的嵌套 JSON 收敛成 SDK 公共的结构化分片。
+// 之后的 Agent 只消费 ToolCallDelta，不依赖某个 Provider 的 JSON 字段布局。
+bool parseToolCallDeltas(const nlohmann::json& tool_calls, std::vector<ToolCallDelta>& deltas) {
+    if(!tool_calls.is_array()) {
+        return false;
+    }
+
+    for(const nlohmann::json& tool_call : tool_calls) {
+        if(!tool_call.is_object()) {
+            return false;
+        }
+
+        ToolCallDelta delta;
+        if(!readToolCallIndex(tool_call, delta.index) || !readOptionalString(tool_call, "id", delta.id)) {
+            return false;
+        }
+
+        if(!tool_call.contains("function") || tool_call.at("function").is_null()) {
+            deltas.push_back(std::move(delta));
+            continue;
+        }
+
+        const nlohmann::json& function = tool_call.at("function");
+        std::optional<std::string> arguments_delta;
+        if(!function.is_object() || !readOptionalString(function, "name", delta.name) ||
+           !readOptionalString(function, "arguments", arguments_delta)) {
+            return false;
+        }
+        if(arguments_delta.has_value()) {
+            delta.arguments_delta = std::move(*arguments_delta);
+        }
+        deltas.push_back(std::move(delta));
+    }
+
+    return true;
 }
 
 // LF：\n Unix/Linux/macOS 标准换行
@@ -131,12 +215,17 @@ std::vector<StreamEvent> parseEventBlock(const std::string& block) {
             }
         }
 
-        if(delta.contains("tool_calls") && delta.at("tool_calls").is_array() && !delta.at("tool_calls").empty()) {
-            events.push_back(StreamEvent{
-                StreamEventType::ToolCallDelta,
-                delta.at("tool_calls").dump(),
-                "",
-            });
+        if(delta.contains("tool_calls") && !delta.at("tool_calls").is_null()) {
+            std::vector<ToolCallDelta> tool_call_deltas;
+            if(!parseToolCallDeltas(delta.at("tool_calls"), tool_call_deltas)) {
+                return {errorEvent("流式工具调用增量格式无效")};
+            }
+            if(!tool_call_deltas.empty()) {
+                StreamEvent event;
+                event.type = StreamEventType::ToolCallDelta;
+                event.tool_call_deltas = std::move(tool_call_deltas);
+                events.push_back(std::move(event));
+            }
         }
     }
 

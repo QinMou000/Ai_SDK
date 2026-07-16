@@ -1,25 +1,32 @@
 # Agent 与工作区文件工具契约
 
-## 场景一：无状态同步 `SimpleAgent`
+## 场景一：无状态 `SimpleAgent` 的同步与回调流式 ReAct
 
 ### 1. 作用范围 / 触发条件
 
 - 触发：新增或修改 `include/agent/SimpleAgent.h`、`src/agent/SimpleAgent.cpp`，或调整 Agent 对 `AIClient`、工具和 Trace 的组合方式。
-- 目标：在不修改 `AIClient` 的前提下提供最小同步 ReAct 循环，并保持 SDK 基础客户端不承担消息历史或继续决策。
+- 目标：在不修改 `AIClient` 的前提下提供同步与回调流式的最小 ReAct 循环，并保持 SDK 基础客户端不承担消息历史或继续决策。
 
 ### 2. 关键签名
 
 - `SimpleAgent::SimpleAgent(AIClient& client, SimpleAgentOptions options = {})`
 - `AgentResult SimpleAgent::run(const std::string& input)`
 - `AgentResult SimpleAgent::run(const std::string& input, TraceSession& trace_session)`
+- `AgentResult SimpleAgent::runStream(const std::string& input, AgentStreamCallback callback)`
+- `AgentResult SimpleAgent::runStream(const std::string& input, AgentStreamCallback callback, TraceSession& trace_session)`
 - `struct AgentResult { bool success; std::string final_answer; std::string error_message; }`
+- `enum class AgentStreamEventType { TextDelta, ToolCallReady, ToolExecutionFinished }`
+- `struct AgentStreamEvent { AgentStreamEventType type; std::string delta; std::string tool_call_id; std::string tool_name; bool success; }`
 - `struct SimpleAgentOptions { std::string system_prompt; std::optional<WorkspaceFileToolOptions> workspace_file_tools; }`
 
 ### 3. 契约
 
-- Agent 只能经 `AIClient::chat(...)`、`AIClient::executeToolCalls(...)` 和 `AIClient::tools()` 组合既有能力；不得修改 `AIClient` 的声明、实现或 Provider/HTTP 协议。
-- 每次 `run(...)` 都新建局部消息数组：非空系统提示词（若有）加当前用户输入。返回后不得保留跨任务消息、会话或记忆。
+- Agent 只能经 `AIClient::chat(...)`、`AIClient::streamChat(...)`、`AIClient::executeToolCalls(...)` 和 `AIClient::tools()` 组合既有能力；不得修改 `AIClient` 的声明、实现或 Provider/HTTP 协议。
+- 每次 `run(...)` 或 `runStream(...)` 都新建局部消息数组：非空系统提示词（若有）加当前用户输入。返回后不得保留跨任务消息、会话或记忆。
 - 模型响应有 `tool_calls` 时，必须先回填该 assistant 消息，再按原顺序回填每个 `ToolExecutionResult::toToolMessage()`；无 `tool_calls` 时返回 `success == true` 与 `response.content`。
+- `runStream(...)` 的 callback 必填且仅在当前同步调用期间使用。文本分片必须立即以 `TextDelta` 交付；回调抛出的异常按 Agent 流式运行失败收敛。
+- 流式 Tool Call 只能消费 `StreamEvent::tool_call_deltas` 中的结构化 `index`、可选 `id`/`name` 与 `arguments_delta`，不得在 Agent 中解析 Provider 原始 JSON。每轮流结束后按 `index` 聚合、校验 ID、名称和 JSON 对象参数，再执行工具。
+- 流式工具参数或结果正文不得默认经 callback 泄露。参数校验通过后发出 `ToolCallReady`；每个串行执行结果回填 ToolMessage 后发出 `ToolExecutionFinished`，并以 `success` 表示结果状态。
 - 每轮只把 `ToolRiskLevel::Low` 工具放入 `ChatRequest::tools`。模型直接请求已注册的 `Medium` 或 `High` 工具时，不得执行 handler，必须回填失败 Observation。
 - 未知工具和工具 handler 失败继续委托既有 `ToolExecutor` 收敛为失败结果，Agent 不得因此提前终止循环。
 - 公开 `run` 不接收循环轮次。内部最多请求模型 16 次；第 16 次仍返回 Tool Call 时，返回失败 `AgentResult`，不得发起第 17 次请求。
@@ -31,6 +38,8 @@
 | --- | --- |
 | `input` 为空 | 直接返回 `success == false`，`error_message == "Agent 输入不能为空"`，不调用 Provider |
 | Provider 或未收敛的运行期代码抛 `std::exception` | 返回 `success == false`，错误以 `Agent 执行失败: ` 为上下文 |
+| `runStream(...)` 的 callback 为空 | 直接返回 `success == false`，`error_message == "Agent 流式回调不能为空"`，不调用 Provider |
+| 流中出现 `Error`、Tool Call 缺 ID/名称或参数不是 JSON 对象 | 返回 `success == false`，错误以 `Agent 流式执行失败: ` 为上下文；不得执行该轮工具 |
 | 响应不含 Tool Call | 返回 `success == true`，最终答案为响应文本 |
 | Tool handler 失败或工具未知 | 回填失败 ToolMessage，允许下一轮模型生成最终文本 |
 | 模型调用已注册 `Medium`/`High` 工具 | 不执行 handler，回填“拒绝执行非低风险工具”失败结果 |
@@ -38,13 +47,14 @@
 
 ### 5. Good / Base / Bad
 
-- Good：上层创建 `SimpleAgent`，调用 `run(input, trace)`；Agent 复用 `AIClient` 的消息、工具结果和 Trace 公开协议。
+- Good：上层创建 `SimpleAgent`，按需调用 `run(input, trace)` 或 `runStream(input, callback, trace)`；Agent 复用 `AIClient` 的消息、工具结果和 Trace 公开协议。
 - Base：无文件根目录、无 Low 工具时模型仍可直接返回文本；Agent 不强制 Tool Call。
-- Bad：在 `AIClient::chat()` 或 `executeToolCalls()` 内自动追加消息并无限循环，或让 Agent 自动执行 Medium/High 工具。
+- Bad：在 `AIClient::chat()`、`streamChat()` 或 `executeToolCalls()` 内自动追加消息并无限循环；在 Agent 中解析 Provider JSON；或让 Agent 自动执行 Medium/High 工具。
 
 ### 6. 必要测试
 
 - `tests/agent/simple_agent_test.cpp` 必须覆盖：两轮以上 Tool Call、两次 `run` 历史隔离、未知工具和 handler 失败恢复、风险过滤和直接臆造拦截、16 次熔断、空输入、显式 Trace。
+- 同一文件必须使用脚本化流式 Provider 覆盖：无 Tool Call 文本分片顺序与完整答案、交错工具分片按 index 聚合、参数 JSON 失败和流错误均无工具副作用、`ToolCallReady`/`ToolExecutionFinished` 顺序、流式风险拦截、16 次流式熔断、空 callback 与流式 Trace。
 - 通过可注入 `IModelProvider` 脚本化响应，不依赖 API Key、网络或真实 Provider。
 - 修改工具策略时，同时断言 `ChatRequest::tools` 的可见集合与 handler 实际执行次数。
 
@@ -66,7 +76,14 @@ while(true) {
 ```cpp
 SimpleAgent agent(client, options);
 TraceSession trace = client.startTrace();
-const AgentResult result = agent.run("整理工作区说明", trace);
+const AgentResult result = agent.runStream(
+    "整理工作区说明",
+    [](const AgentStreamEvent& event) {
+        if(event.type == AgentStreamEventType::TextDelta) {
+            render(event.delta);
+        }
+    },
+    trace);
 ```
 
 ## 场景二：显式授权的工作区文本工具

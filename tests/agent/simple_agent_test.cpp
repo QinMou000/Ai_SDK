@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -118,6 +119,39 @@ class ScriptedProvider final : public aiSDK::IModelProvider {
     std::size_t next_response_ = 0U;
 };
 
+// StreamingScriptedProvider 按轮次回放完整的流式事件序列，并保存每轮请求快照。
+// 它刻意不实现同步 chat 成功路径，确保 runStream 测试真正走过 AIClient 的流式公开入口。
+class StreamingScriptedProvider final : public aiSDK::IModelProvider {
+   public:
+    explicit StreamingScriptedProvider(std::vector<std::vector<aiSDK::StreamEvent>> responses)
+        : responses_(std::move(responses)) {}
+
+    aiSDK::ChatResponse chat(const aiSDK::ChatRequest&) override {
+        throw std::logic_error("流式 SimpleAgent 测试不应调用同步接口");
+    }
+
+    void streamChat(const aiSDK::ChatRequest& request, aiSDK::StreamCallback callback) override {
+        requests.push_back(request);
+        if(next_response_ >= responses_.size()) {
+            throw std::runtime_error("测试流式 Provider 缺少预设响应");
+        }
+
+        for(const aiSDK::StreamEvent& event : responses_[next_response_++]) {
+            callback(event);
+        }
+    }
+
+    aiSDK::ProviderInfo info() const override {
+        return aiSDK::ProviderInfo{"stream-scripted", "stream-scripted-model", true, true};
+    }
+
+    std::vector<aiSDK::ChatRequest> requests;
+
+   private:
+    std::vector<std::vector<aiSDK::StreamEvent>> responses_;
+    std::size_t next_response_ = 0U;
+};
+
 // toolCallResponse 保持 response.tool_calls 与 assistant 消息中的工具调用一致。
 // OpenAI-compatible 消息序列需要先回填该 assistant 消息，测试因此不能只填快捷字段。
 aiSDK::ChatResponse toolCallResponse(std::string id, std::string name,
@@ -138,6 +172,39 @@ aiSDK::AIClient makeClient(const std::shared_ptr<ScriptedProvider>& provider, bo
     aiSDK::AIClient client(config);
     client.setProvider(provider);
     return client;
+}
+
+// makeStreamingClient 与同步 helper 使用同一真实 AIClient 配置，仅替换确定性的流式 Provider。
+// 这使测试能够覆盖 Trace 和 ToolExecutor 的生产接线，而不依赖网络 SSE 传输。
+aiSDK::AIClient makeStreamingClient(const std::shared_ptr<StreamingScriptedProvider>& provider,
+                                    bool enable_trace = false) {
+    aiSDK::Config config;
+    config.enable_trace = enable_trace;
+    aiSDK::AIClient client(config);
+    client.setProvider(provider);
+    return client;
+}
+
+// textDeltaEvent 和 doneEvent 保持测试脚本的意图清晰，不让用例充满无关的空字段。
+aiSDK::StreamEvent textDeltaEvent(std::string text) {
+    return aiSDK::StreamEvent{aiSDK::StreamEventType::Delta, std::move(text), ""};
+}
+
+aiSDK::StreamEvent doneEvent() {
+    return aiSDK::StreamEvent{aiSDK::StreamEventType::Done, "", ""};
+}
+
+// toolCallDeltaEvent 将结构化分片包装为统一 SSE 事件，模拟 SSEParser 对 Provider 的实际输出。
+aiSDK::StreamEvent toolCallDeltaEvent(std::vector<aiSDK::ToolCallDelta> deltas) {
+    aiSDK::StreamEvent event;
+    event.type = aiSDK::StreamEventType::ToolCallDelta;
+    event.tool_call_deltas = std::move(deltas);
+    return event;
+}
+
+// errorEvent 模拟 Provider 已经识别出的流错误；Agent 必须中止而不是执行此前任何半成品调用。
+aiSDK::StreamEvent errorEvent(std::string message) {
+    return aiSDK::StreamEvent{aiSDK::StreamEventType::Error, "", std::move(message)};
 }
 
 // registerLowTool 为测试注册最小可执行低风险工具。
@@ -336,6 +403,328 @@ TEST(SimpleAgentTest, ReusesExplicitTraceSessionForEntireLoop) {
     aiSDK::TraceSession session = client.startTrace();
 
     const aiSDK::AgentResult result = agent.run("记录链路", session);
+    ASSERT_TRUE(result.success);
+    const aiSDK::Trace trace = session.snapshot();
+    ASSERT_EQ(trace.steps.size(), 4U);
+    EXPECT_EQ(trace.steps[0].type, aiSDK::TraceStepType::ModelRequest);
+    EXPECT_EQ(trace.steps[1].type, aiSDK::TraceStepType::ToolBatch);
+    EXPECT_EQ(trace.steps[2].type, aiSDK::TraceStepType::ToolExecution);
+    EXPECT_EQ(trace.steps[3].type, aiSDK::TraceStepType::ModelRequest);
+}
+
+// 不含 Tool Call 的流式响应应逐片回调，并将拼接后的完整文本作为最终答案返回。
+// 这为调用方终端或 UI 渲染提供最小的实时输出契约，不要求引入后台线程。
+TEST(SimpleAgentTest, StreamsTextDeltasInOrderWithoutToolCalls) {
+    const auto provider = std::make_shared<StreamingScriptedProvider>(std::vector<std::vector<aiSDK::StreamEvent>>{
+        {
+         textDeltaEvent("流式"),
+         textDeltaEvent("文本"),
+         doneEvent(),
+         },
+    });
+    aiSDK::AIClient client = makeStreamingClient(provider);
+    aiSDK::SimpleAgent agent(client);
+    std::vector<aiSDK::AgentStreamEvent> events;
+
+    const aiSDK::AgentResult result =
+        agent.runStream("直接回答", [&events](const aiSDK::AgentStreamEvent& event) { events.push_back(event); });
+
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(result.final_answer, "流式文本");
+    ASSERT_EQ(events.size(), 2U);
+    EXPECT_EQ(events[0].type, aiSDK::AgentStreamEventType::TextDelta);
+    EXPECT_EQ(events[0].delta, "流式");
+    EXPECT_EQ(events[1].type, aiSDK::AgentStreamEventType::TextDelta);
+    EXPECT_EQ(events[1].delta, "文本");
+    EXPECT_EQ(provider->requests.size(), 1U);
+}
+
+// 两个调用的字段和参数分片交错到达时，Agent 必须按 index 还原调用顺序并保持参数完整。
+// 文本只在最终响应到达后输出，验证工具生命周期事件不会和模型文本事件混淆。
+TEST(SimpleAgentTest, AggregatesFragmentedStreamingToolCallsAndContinues) {
+    const auto provider = std::make_shared<StreamingScriptedProvider>(std::vector<std::vector<aiSDK::StreamEvent>>{
+        {
+         toolCallDeltaEvent({
+                aiSDK::ToolCallDelta{0U, std::string("call-first"), std::string("add"), "{\"a\":1"},
+                aiSDK::ToolCallDelta{1U, std::string("call-second"), std::string("add"), "{\"a\":2"},
+            }),
+         toolCallDeltaEvent({
+                aiSDK::ToolCallDelta{1U, std::nullopt, std::nullopt, ",\"b\":4}"},
+                aiSDK::ToolCallDelta{0U, std::nullopt, std::nullopt, ",\"b\":3}"},
+            }),
+         doneEvent(),
+         },
+        {
+         textDeltaEvent("两个计算完成"),
+         doneEvent(),
+         },
+    });
+    aiSDK::AIClient client = makeStreamingClient(provider);
+    std::vector<nlohmann::json> executed_arguments;
+    client.tools().registerTool(
+        aiSDK::Tool{
+            "add", "相加测试工具", nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}},
+            aiSDK::ToolRiskLevel::Low
+    },
+        [&executed_arguments](const nlohmann::json& arguments) {
+            executed_arguments.push_back(arguments);
+            return aiSDK::ToolResult::successResult(arguments);
+        });
+    aiSDK::SimpleAgent agent(client);
+    std::vector<aiSDK::AgentStreamEvent> events;
+
+    const aiSDK::AgentResult result =
+        agent.runStream("计算两组数据", [&events](const aiSDK::AgentStreamEvent& event) { events.push_back(event); });
+
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(result.final_answer, "两个计算完成");
+    ASSERT_EQ(executed_arguments.size(), 2U);
+    EXPECT_EQ(executed_arguments[0], nlohmann::json({
+                                         {"a", 1},
+                                         {"b", 3}
+    }));
+    EXPECT_EQ(executed_arguments[1], nlohmann::json({
+                                         {"a", 2},
+                                         {"b", 4}
+    }));
+    ASSERT_EQ(provider->requests.size(), 2U);
+    ASSERT_EQ(provider->requests[1].messages.size(), 5U);
+    ASSERT_EQ(provider->requests[1].messages[2].tool_calls.size(), 2U);
+    EXPECT_EQ(provider->requests[1].messages[2].tool_calls[0].id, "call-first");
+    EXPECT_EQ(provider->requests[1].messages[2].tool_calls[1].id, "call-second");
+    EXPECT_EQ(provider->requests[1].messages[3].tool_call_id, "call-first");
+    EXPECT_EQ(provider->requests[1].messages[4].tool_call_id, "call-second");
+    ASSERT_EQ(events.size(), 5U);
+    EXPECT_EQ(events[0].type, aiSDK::AgentStreamEventType::ToolCallReady);
+    EXPECT_EQ(events[0].tool_call_id, "call-first");
+    EXPECT_EQ(events[1].type, aiSDK::AgentStreamEventType::ToolCallReady);
+    EXPECT_EQ(events[1].tool_call_id, "call-second");
+    EXPECT_EQ(events[2].type, aiSDK::AgentStreamEventType::ToolExecutionFinished);
+    EXPECT_TRUE(events[2].success);
+    EXPECT_EQ(events[3].type, aiSDK::AgentStreamEventType::ToolExecutionFinished);
+    EXPECT_TRUE(events[3].success);
+    EXPECT_EQ(events[4].type, aiSDK::AgentStreamEventType::TextDelta);
+    EXPECT_EQ(events[4].delta, "两个计算完成");
+}
+
+// 参数 JSON 未闭合时，聚合器必须在任何 ToolCallReady 或真实 handler 之前拒绝本轮任务。
+// 这锁定“流式传输完成不代表参数可执行”的安全边界。
+TEST(SimpleAgentTest, RejectsMalformedStreamingToolArgumentsBeforeExecution) {
+    const auto provider = std::make_shared<StreamingScriptedProvider>(std::vector<std::vector<aiSDK::StreamEvent>>{
+        {
+         toolCallDeltaEvent({
+                aiSDK::ToolCallDelta{0U, std::string("call-invalid"), std::string("echo"), "{"},
+            }),
+         doneEvent(),
+         },
+    });
+    aiSDK::AIClient client = makeStreamingClient(provider);
+    std::size_t executions = 0U;
+    client.tools().registerTool(
+        aiSDK::Tool{
+            "echo", "回显测试工具", nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}},
+            aiSDK::ToolRiskLevel::Low
+    },
+        [&executions](const nlohmann::json&) {
+            ++executions;
+            return aiSDK::ToolResult::successResult(nullptr);
+        });
+    aiSDK::SimpleAgent agent(client);
+    std::vector<aiSDK::AgentStreamEvent> events;
+
+    const aiSDK::AgentResult result =
+        agent.runStream("尝试不完整参数", [&events](const aiSDK::AgentStreamEvent& event) { events.push_back(event); });
+
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.error_message.find("合法 JSON"), std::string::npos);
+    EXPECT_EQ(executions, 0U);
+    EXPECT_EQ(provider->requests.size(), 1U);
+    EXPECT_TRUE(events.empty());
+}
+
+// 首片段缺失调用 ID 或名称也属于不可执行状态，不能因参数恰好合法就跳过关联校验。
+// 该断言避免模型 ToolMessage 无法绑定原调用时仍触发本地副作用。
+TEST(SimpleAgentTest, RejectsIncompleteStreamingToolCallBeforeExecution) {
+    const auto provider = std::make_shared<StreamingScriptedProvider>(std::vector<std::vector<aiSDK::StreamEvent>>{
+        {
+         toolCallDeltaEvent({
+                aiSDK::ToolCallDelta{0U, std::nullopt, std::string("echo"), "{}"},
+            }),
+         doneEvent(),
+         },
+    });
+    aiSDK::AIClient client = makeStreamingClient(provider);
+    std::size_t executions = 0U;
+    client.tools().registerTool(
+        aiSDK::Tool{
+            "echo", "回显测试工具", nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}},
+            aiSDK::ToolRiskLevel::Low
+    },
+        [&executions](const nlohmann::json&) {
+            ++executions;
+            return aiSDK::ToolResult::successResult(nullptr);
+        });
+    aiSDK::SimpleAgent agent(client);
+    std::vector<aiSDK::AgentStreamEvent> events;
+
+    const aiSDK::AgentResult result = agent.runStream(
+        "尝试缺失 ID 的调用", [&events](const aiSDK::AgentStreamEvent& event) { events.push_back(event); });
+
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.error_message.find("缺少 ID 或名称"), std::string::npos);
+    EXPECT_EQ(executions, 0U);
+    EXPECT_EQ(provider->requests.size(), 1U);
+    EXPECT_TRUE(events.empty());
+}
+
+// Provider 报告流错误时，即使此前已收到完整 Tool Call，也不能执行任何本地工具。
+// 错误通过 AgentResult 交付，调用方不会得到误导性的工具就绪或执行完成事件。
+TEST(SimpleAgentTest, StopsOnStreamingErrorBeforeExecutingAnyTool) {
+    const auto provider = std::make_shared<StreamingScriptedProvider>(std::vector<std::vector<aiSDK::StreamEvent>>{
+        {
+         toolCallDeltaEvent({
+                aiSDK::ToolCallDelta{0U, std::string("call-error"), std::string("echo"), "{}"},
+            }),
+         errorEvent("测试流错误"),
+         },
+    });
+    aiSDK::AIClient client = makeStreamingClient(provider);
+    std::size_t executions = 0U;
+    client.tools().registerTool(
+        aiSDK::Tool{
+            "echo", "回显测试工具", nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}},
+            aiSDK::ToolRiskLevel::Low
+    },
+        [&executions](const nlohmann::json&) {
+            ++executions;
+            return aiSDK::ToolResult::successResult(nullptr);
+        });
+    aiSDK::SimpleAgent agent(client);
+    std::vector<aiSDK::AgentStreamEvent> events;
+
+    const aiSDK::AgentResult result =
+        agent.runStream("处理中断流", [&events](const aiSDK::AgentStreamEvent& event) { events.push_back(event); });
+
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.error_message.find("测试流错误"), std::string::npos);
+    EXPECT_EQ(executions, 0U);
+    EXPECT_EQ(provider->requests.size(), 1U);
+    EXPECT_TRUE(events.empty());
+}
+
+// 流式路径必须复用与同步路径相同的低风险策略；模型臆造 Medium 工具也只能收到失败 Observation。
+// 后续文本轮仍应自然结束，证明策略拒绝不是整个任务的异常终止。
+TEST(SimpleAgentTest, RejectsNonLowStreamingToolAndAllowsFinalResponse) {
+    const auto provider = std::make_shared<StreamingScriptedProvider>(std::vector<std::vector<aiSDK::StreamEvent>>{
+        {
+         toolCallDeltaEvent({
+                aiSDK::ToolCallDelta{0U, std::string("call-medium"), std::string("medium_tool"), "{}"},
+            }),
+         doneEvent(),
+         },
+        {
+         textDeltaEvent("已拒绝中风险操作"),
+         doneEvent(),
+         },
+    });
+    aiSDK::AIClient client = makeStreamingClient(provider);
+    std::size_t executions = 0U;
+    client.tools().registerTool(
+        aiSDK::Tool{
+            "medium_tool", "中风险流式测试工具",
+            nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}},
+            aiSDK::ToolRiskLevel::Medium
+    },
+        [&executions](const nlohmann::json&) {
+            ++executions;
+            return aiSDK::ToolResult::successResult(nullptr);
+        });
+    aiSDK::SimpleAgent agent(client);
+    std::vector<aiSDK::AgentStreamEvent> events;
+
+    const aiSDK::AgentResult result = agent.runStream(
+        "执行中风险流式工具", [&events](const aiSDK::AgentStreamEvent& event) { events.push_back(event); });
+
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(result.final_answer, "已拒绝中风险操作");
+    EXPECT_EQ(executions, 0U);
+    ASSERT_EQ(provider->requests.size(), 2U);
+    EXPECT_TRUE(provider->requests[0].tools.empty());
+    EXPECT_NE(provider->requests[1].messages.back().content.find("拒绝执行非低风险工具"), std::string::npos);
+    ASSERT_EQ(events.size(), 3U);
+    EXPECT_EQ(events[0].type, aiSDK::AgentStreamEventType::ToolCallReady);
+    EXPECT_EQ(events[1].type, aiSDK::AgentStreamEventType::ToolExecutionFinished);
+    EXPECT_FALSE(events[1].success);
+    EXPECT_EQ(events[2].type, aiSDK::AgentStreamEventType::TextDelta);
+}
+
+// 每一轮都以完整的低风险调用结束时，流式入口也必须在第 16 次请求后触发同一安全熔断。
+// 该用例不依赖私有常量，只观察请求数量和没有第 17 次副作用的公开结果。
+TEST(SimpleAgentTest, StopsStreamingAtInternalSafetyFuse) {
+    std::vector<std::vector<aiSDK::StreamEvent>> responses;
+    for(std::size_t index = 0U; index < 16U; ++index) {
+        responses.push_back({
+            toolCallDeltaEvent({
+                                aiSDK::ToolCallDelta{0U, "call-" + std::to_string(index), std::string("noop"), "{}"},
+                                }
+            ),
+            doneEvent(),
+        });
+    }
+    const auto provider = std::make_shared<StreamingScriptedProvider>(std::move(responses));
+    aiSDK::AIClient client = makeStreamingClient(provider);
+    registerLowTool(client, "noop");
+    aiSDK::SimpleAgent agent(client);
+
+    const aiSDK::AgentResult result = agent.runStream("持续调用流式工具", [](const aiSDK::AgentStreamEvent&) {});
+
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(result.final_answer.empty());
+    EXPECT_NE(result.error_message.find("安全熔断"), std::string::npos);
+    EXPECT_EQ(provider->requests.size(), 16U);
+}
+
+// 参数错误和缺失回调均须在 Provider 之前返回，避免无消费者的网络流或 Trace 噪声。
+// 两个分支共用同一空脚本 Provider，验证它没有收到任何请求。
+TEST(SimpleAgentTest, RejectsEmptyInputOrMissingCallbackBeforeStartingStream) {
+    const auto provider = std::make_shared<StreamingScriptedProvider>(std::vector<std::vector<aiSDK::StreamEvent>>{});
+    aiSDK::AIClient client = makeStreamingClient(provider);
+    aiSDK::SimpleAgent agent(client);
+    aiSDK::AgentStreamCallback empty_callback;
+
+    const aiSDK::AgentResult missing_callback = agent.runStream("缺少回调", empty_callback);
+    const aiSDK::AgentResult empty_input = agent.runStream("", [](const aiSDK::AgentStreamEvent&) {});
+
+    EXPECT_FALSE(missing_callback.success);
+    EXPECT_EQ(missing_callback.error_message, "Agent 流式回调不能为空");
+    EXPECT_FALSE(empty_input.success);
+    EXPECT_EQ(empty_input.error_message, "Agent 输入不能为空");
+    EXPECT_TRUE(provider->requests.empty());
+}
+
+// 显式 Trace 会话在流式 ReAct 中仍应包含两次模型请求和一次真实工具批次。
+// 生命周期回调属于调用方 UI 观察面，不会创建额外 Trace 步骤或破坏现有层级。
+TEST(SimpleAgentTest, ReusesExplicitTraceSessionForStreamingLoop) {
+    const auto provider = std::make_shared<StreamingScriptedProvider>(std::vector<std::vector<aiSDK::StreamEvent>>{
+        {
+         toolCallDeltaEvent({
+                aiSDK::ToolCallDelta{0U, std::string("call-trace-stream"), std::string("echo"), "{}"},
+            }),
+         doneEvent(),
+         },
+        {
+         textDeltaEvent("流式链路完成"),
+         doneEvent(),
+         },
+    });
+    aiSDK::AIClient client = makeStreamingClient(provider, true);
+    registerLowTool(client, "echo");
+    aiSDK::SimpleAgent agent(client);
+    aiSDK::TraceSession session = client.startTrace();
+
+    const aiSDK::AgentResult result = agent.runStream(
+        "记录流式链路", [](const aiSDK::AgentStreamEvent&) {}, session);
+
     ASSERT_TRUE(result.success);
     const aiSDK::Trace trace = session.snapshot();
     ASSERT_EQ(trace.steps.size(), 4U);

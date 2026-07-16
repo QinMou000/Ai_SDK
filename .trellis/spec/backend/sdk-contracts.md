@@ -124,6 +124,7 @@
 - `virtual HttpResponse IHttpTransport::postJson(...) const`
 - `virtual HttpResponse IHttpTransport::postJsonStream(...) const`
 - `std::vector<StreamEvent> SSEParser::parseChunk(const std::string& chunk) const`
+- `struct ToolCallDelta { std::size_t index; std::optional<std::string> id; std::optional<std::string> name; std::string arguments_delta; }`
 
 ### 3. 契约
 
@@ -133,6 +134,8 @@
 - `DeepSeekProvider::streamChat()` 负责把原始字节流缓冲成完整 SSE 事件边界，再交给 `SSEParser`。
 - `SSEParser` 接收“完整事件块”而非任意碎片，支持 `\r\n`、`\n`、`\r` 归一化。
 - 遇到 `[DONE]` 返回 `Done` 事件；遇到错误对象或非法 JSON 返回 `Error` 事件。
+- 工具调用增量必须由 `SSEParser` 从 Provider 的嵌套 JSON 转换为 `StreamEvent::tool_call_deltas`。每个分片保留非负 `index`、可选 `id`/`name` 和字符串 `arguments_delta`；上层不得重新解析供应商原始 JSON。
+- `tool_calls` 中的非数组、非对象项、缺失/负数/溢出索引，或 ID、名称、参数片段的非字符串类型，必须返回 `Error` 事件；不得静默转换为文本或不安全容器下标。
 
 ### 4. 校验与错误矩阵
 
@@ -142,17 +145,19 @@
 | 回调内部抛异常 | 请求结束后重新抛出原异常 |
 | SSE 块中 `content` 为 `null` | 解析器忽略该增量，不产出文本事件 |
 | SSE 数据非法 | 生成 `Error` 事件 |
+| Tool Call 增量结构或字段类型非法 | 生成 `Error` 事件，错误消息为“流式工具调用增量格式无效” |
 | 网络结束时仍有残余缓冲 | `DeepSeekProvider` 对尾块做最后一次解析 |
 
 ### 5. Good / Base / Bad
 
-- Good：Provider 先按空行边界缓冲，再把完整事件交给 `SSEParser`。
+- Good：Provider 先按空行边界缓冲，再把完整事件交给 `SSEParser`；解析器将工具 JSON 收敛为结构化 `ToolCallDelta`。
 - Base：只返回文本增量，未包含工具调用，也能持续回调。
-- Bad：把每次底层回调收到的半截字符串直接交给 `SSEParser`，导致 JSON 被截断。
+- Bad：把每次底层回调收到的半截字符串直接交给 `SSEParser`，或把 `tool_calls.dump()` 作为未解析字符串交给 Agent。
 
 ### 6. 必要测试
 
-- `tests/http/sse_parser_test.cpp` 风格的正常、`null` 内容、`Done`、错误对象测试。
+- `tests/http/sse_parser_test.cpp` 必须覆盖：正常、`null` 内容、`Done`、错误对象，以及交错多 Tool Call 的 `index`、ID、名称和参数分片解析。
+- 同一测试必须断言负数索引等非法工具增量返回 `Error`，不产生 `ToolCallDelta`。
 - `HttpClient` 相关测试或后续补测需覆盖回调抛错重抛语义。
 - Provider 流式测试需覆盖尾部残余缓冲刷新。
 

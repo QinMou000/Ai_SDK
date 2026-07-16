@@ -2,7 +2,11 @@
 
 #include <cstddef>
 #include <exception>
+#include <map>
+#include <nlohmann/json.hpp>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -83,6 +87,75 @@ std::vector<ToolExecutionResult> executeAllowedCalls(AIClient& client, const std
     return results;
 }
 
+// PendingToolCall 只保存一个流式 Tool Call 尚未完成的协议字段。
+// id 与名称通常只在首个分片提供，因此必须跨 SSE 事件保留直到当前模型请求结束。
+struct PendingToolCall {
+    std::optional<std::string> id;
+    std::optional<std::string> name;
+    std::string raw_arguments;
+};
+
+// ToolCallStreamAccumulator 以供应商给出的 index 聚合分片，并在执行前完成协议校验。
+// 这让 Agent 不需要解析 Provider 原始 JSON，也保证不完整或无效参数无法触发工具副作用。
+class ToolCallStreamAccumulator {
+   public:
+    // append 保留每个 index 内的到达顺序，同时拒绝同一调用被改写标识符的异常流。
+    void append(const ToolCallDelta& delta) {
+        PendingToolCall& pending = calls_[delta.index];
+        updateStableField(pending.id, delta.id, "ID");
+        updateStableField(pending.name, delta.name, "名称");
+        pending.raw_arguments.append(delta.arguments_delta);
+    }
+
+    bool empty() const {
+        return calls_.empty();
+    }
+
+    // complete 按 index 从小到大还原模型调用顺序，并把原始参数文本校验为 JSON 对象。
+    // 工具执行接口要求结构化参数；空文本、数组或语法错误都必须在执行前终止本轮 Agent。
+    std::vector<ToolCall> complete() const {
+        std::vector<ToolCall> calls;
+        calls.reserve(calls_.size());
+
+        for(const auto& [index, pending] : calls_) {
+            static_cast<void>(index);
+            if(!pending.id.has_value() || pending.id->empty() || !pending.name.has_value() || pending.name->empty()) {
+                throw std::runtime_error("流式工具调用缺少 ID 或名称");
+            }
+
+            const nlohmann::json arguments = nlohmann::json::parse(pending.raw_arguments, nullptr, false);
+            if(arguments.is_discarded() || !arguments.is_object()) {
+                throw std::runtime_error("流式工具调用参数不是合法 JSON 对象");
+            }
+
+            calls.push_back(ToolCall{*pending.id, *pending.name, arguments, pending.raw_arguments});
+        }
+        return calls;
+    }
+
+   private:
+    // 同一调用的 id 与名称一旦出现便不可变，防止分片串扰后误执行其他工具。
+    static void updateStableField(std::optional<std::string>& stored, const std::optional<std::string>& incoming,
+                                  const char* field_name) {
+        if(!incoming.has_value()) {
+            return;
+        }
+
+        if(stored.has_value() && *stored != *incoming) {
+            throw std::runtime_error("流式工具调用" + std::string(field_name) + "不一致");
+        }
+        stored = incoming;
+    }
+
+    std::map<std::size_t, PendingToolCall> calls_;
+};
+
+// emitStreamEvent 统一构造回调事件，避免文本与工具生命周期在字段填充上产生分叉。
+void emitStreamEvent(const AgentStreamCallback& callback, AgentStreamEventType type, std::string delta,
+                     std::string tool_call_id, std::string tool_name, bool success) {
+    callback(AgentStreamEvent{type, std::move(delta), std::move(tool_call_id), std::move(tool_name), success});
+}
+
 }  // namespace
 
 SimpleAgent::SimpleAgent(AIClient& client, SimpleAgentOptions options)
@@ -101,6 +174,17 @@ AgentResult SimpleAgent::run(const std::string& input) {
 AgentResult SimpleAgent::run(const std::string& input, TraceSession& trace_session) {
     // TraceSession 的所有权仍在调用方；Agent 仅在本次循环中借用该会话。
     return runInternal(input, &trace_session);
+}
+
+AgentResult SimpleAgent::runStream(const std::string& input, AgentStreamCallback callback) {
+    // 回调按值接收后仅在本次同步调用内使用，不保存到 Agent 成员以避免跨任务引用调用方状态。
+    return runStreamInternal(input, std::move(callback), nullptr);
+}
+
+AgentResult SimpleAgent::runStream(const std::string& input, AgentStreamCallback callback,
+                                   TraceSession& trace_session) {
+    // 流式与普通入口共享同一 TraceSession 借用语义，调用方可在一次时间线内观察完整 ReAct 循环。
+    return runStreamInternal(input, std::move(callback), &trace_session);
 }
 
 AgentResult SimpleAgent::runInternal(const std::string& input, TraceSession* trace_session) {
@@ -155,6 +239,96 @@ AgentResult SimpleAgent::runInternal(const std::string& input, TraceSession* tra
 
     // 只有每次模型响应都继续请求工具时才会到达这里。
     // 固定熔断避免模型异常循环导致无限网络请求和不可控的工具副作用。
+    return AgentResult{false, "", "Agent 达到内部安全熔断上限"};
+}
+
+AgentResult SimpleAgent::runStreamInternal(const std::string& input, AgentStreamCallback callback,
+                                           TraceSession* trace_session) {
+    if(input.empty()) {
+        // 与普通入口保持相同的参数错误文本，使调用方可以不区分响应传输模式处理输入校验。
+        return AgentResult{false, "", "Agent 输入不能为空"};
+    }
+    if(!callback) {
+        // 没有消费者时继续建立流会造成无意义网络成本，也会让实时输出契约无法成立。
+        return AgentResult{false, "", "Agent 流式回调不能为空"};
+    }
+
+    try {
+        // 流式入口同样维持一次 run 一份消息历史的边界，不能因回调而隐式引入长期记忆。
+        std::vector<Message> messages;
+        if(!system_prompt_.empty()) {
+            messages.push_back(SystemMessage(system_prompt_));
+        }
+        messages.push_back(UserMessage(input));
+
+        for(std::size_t request_index = 0; request_index < kMaxModelRequests; ++request_index) {
+            // 每轮开始时创建新的聚合器，绝不允许上轮未完成的分片污染下一次模型请求。
+            ToolCallStreamAccumulator accumulator;
+            std::string content;
+
+            ChatRequest request;
+            request.messages = messages;
+            request.tools = lowRiskTools(client_.tools());
+
+            const StreamCallback stream_callback = [&](const StreamEvent& event) {
+                switch(event.type) {
+                    case StreamEventType::Delta:
+                        // 文本分片在收到后立刻向调用方交付，同时累计为最终 assistant 消息的正文。
+                        content.append(event.delta);
+                        emitStreamEvent(callback, AgentStreamEventType::TextDelta, event.delta, "", "", false);
+                        return;
+                    case StreamEventType::ToolCallDelta:
+                        // SSEParser 已完成供应商 JSON 解析；此处只按公共结构逐片聚合。
+                        for(const ToolCallDelta& delta : event.tool_call_deltas) {
+                            accumulator.append(delta);
+                        }
+                        return;
+                    case StreamEventType::Done:
+                        // 完成标记只结束当前 Provider 数据流；工具是否执行由聚合后的调用集合决定。
+                        return;
+                    case StreamEventType::Error:
+                        // 流中错误不能携带半截 Tool Call 继续执行，直接中断本次 Agent 任务。
+                        throw std::runtime_error("模型流式响应失败: " + event.error_message);
+                }
+            };
+
+            if(trace_session == nullptr) {
+                client_.streamChat(request, stream_callback);
+            } else {
+                client_.streamChat(request, stream_callback, *trace_session);
+            }
+
+            const std::vector<ToolCall> calls = accumulator.complete();
+            if(calls.empty()) {
+                // 没有 Tool Call 即为自然终态；content 已通过回调交付，同时作为最终结果返回。
+                return AgentResult{true, content, ""};
+            }
+
+            // 与非流式路径一样保留携带 Tool Call 的 assistant 消息，供后续 ToolMessage 关联。
+            Message assistant_message = AssistantMessage(content);
+            assistant_message.tool_calls = calls;
+            messages.push_back(std::move(assistant_message));
+
+            for(const ToolCall& call : calls) {
+                // 仅在参数已完整校验后才报告工具就绪，调用方不会看到实际不可执行的伪调用状态。
+                emitStreamEvent(callback, AgentStreamEventType::ToolCallReady, "", call.id, call.name, false);
+            }
+
+            const std::vector<ToolExecutionResult> execution_results =
+                executeAllowedCalls(client_, calls, trace_session);
+            for(const ToolExecutionResult& execution : execution_results) {
+                messages.push_back(execution.toToolMessage());
+                // 结果事件不暴露结果正文，既保留生命周期可见性，也避免默认回调成为敏感内容旁路。
+                emitStreamEvent(callback, AgentStreamEventType::ToolExecutionFinished, "", execution.call.id,
+                                execution.call.name, execution.result.success);
+            }
+        }
+    } catch(const std::exception& exception) {
+        // Provider、SSE 协议、聚合校验、工具执行和回调异常统一收敛为独立的流式结果协议。
+        return AgentResult{false, "", "Agent 流式执行失败: " + std::string(exception.what())};
+    }
+
+    // 该熔断与普通入口共用同一请求上限，防止流式 Tool Call 循环规避成本与副作用保护。
     return AgentResult{false, "", "Agent 达到内部安全熔断上限"};
 }
 

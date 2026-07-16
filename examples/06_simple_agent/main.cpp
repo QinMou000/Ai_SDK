@@ -19,7 +19,7 @@ namespace {
 // 默认提示词选择时间与目录列举，使真实模型有机会演示普通 Low 工具和工作区 Low 工具。
 // 运行前必须由调用方理解当前工作目录即写入授权范围，示例不把仓库根目录硬编码为默认权限。
 // 所有文件写操作仍由模型决定是否调用，应用应在生产环境使用最小的专用工作区。
-// 示例没有循环参数，模型不再请求工具时会自然结束；持续请求则由 Agent 内部安全熔断。
+// 流式文本会即时输出；模型不再请求工具时会自然结束，持续请求则由 Agent 内部安全熔断。
 // Trace 通过显式会话传入，调用方可导出安全元数据而不需要 Agent 保存日志或会话状态。
 // 错误路径只输出场景与异常原因，既不打印环境变量，也不读取或回显 .env 内容。
 // get_current_time 与 add_numbers 都为纯本地计算，适合说明无需逐次审批的 Low 工具注册方式。
@@ -135,7 +135,8 @@ int main(int argc, char** argv) {
             aiSDK::Tool{
                 "get_current_time",
                 "获取运行 SDK 的计算机当前本地时间",
-                nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}, {"additionalProperties", false}},
+                nlohmann::json{
+                               {"type", "object"}, {"properties", nlohmann::json::object()}, {"additionalProperties", false}},
                 aiSDK::ToolRiskLevel::Low,
         },
             [](const nlohmann::json&) {
@@ -171,13 +172,31 @@ int main(int argc, char** argv) {
         aiSDK::SimpleAgent agent(client, std::move(options));
 
         aiSDK::TraceSession trace_session = client.startTrace();
-        // 显式 Trace 重载让所有 ReAct 模型请求和工具批次共享同一可导出会话。
-        const aiSDK::AgentResult result = agent.run(joinPrompt(argc, argv), trace_session);
+        // 流式重载在当前线程即时回调文本；工具事件只显示状态，不默认输出参数或结果正文。
+        // 显式 Trace 重载让所有流式模型请求和工具批次共享同一可导出会话。
+        std::cout << "模型输出：" << std::flush;
+        const aiSDK::AgentResult result = agent.runStream(
+            joinPrompt(argc, argv),
+            [](const aiSDK::AgentStreamEvent& event) {
+                switch(event.type) {
+                    case aiSDK::AgentStreamEventType::TextDelta:
+                        std::cout << event.delta << std::flush;
+                        return;
+                    case aiSDK::AgentStreamEventType::ToolCallReady:
+                        std::cout << "\n[工具就绪：" << event.tool_name << "]\n" << std::flush;
+                        return;
+                    case aiSDK::AgentStreamEventType::ToolExecutionFinished:
+                        std::cout << "[工具" << (event.success ? "完成" : "失败") << "：" << event.tool_name << "]\n"
+                                  << std::flush;
+                        return;
+                }
+            },
+            trace_session);
+        std::cout << '\n';
         if(!result.success) {
             throw std::runtime_error(result.error_message);
         }
 
-        std::cout << result.final_answer << std::endl;
         // Trace 导出不包含默认的消息正文、文件内容或工具参数，因此可作为示例诊断输出。
         // 默认 Trace 只有调用次数、工具名和成功状态等安全元数据，可用于观察 ReAct 循环。
         std::cout << "\nTrace：\n" << trace_session.toJson().dump(2) << std::endl;
