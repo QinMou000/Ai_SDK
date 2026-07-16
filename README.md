@@ -308,7 +308,7 @@ std::vector<ToolExecutionResult> results =
 
 ### SimpleAgent ReAct 示例
 
-`SimpleAgent` 是 `AIClient` 之上的可复用编排层，不修改 `AIClient` 的请求、Provider 或传输语义。每次 `run(...)` 或 `runStream(...)` 都从独立的系统消息和用户消息开始：模型返回 Tool Call 时，Agent 执行工具并回填 assistant/tool 消息；模型不再返回 Tool Call 时，当前文本即为最终答案。为防止异常循环，内部最多发起 16 次模型请求，但调用方不需要也不能传入循环轮次。
+`SimpleAgent` 是 `AIClient` 之上的可复用编排层，不修改 `AIClient` 的请求、Provider 或传输语义。每次 `run(...)` 或 `runStream(...)` 都从独立的系统消息和用户消息开始：模型返回 Tool Call 时，Agent 执行工具并回填 assistant/tool 消息；模型不再返回 Tool Call 时，当前文本即为最终答案。为防止异常循环，内部最多发起 1024 次模型请求，但调用方不需要也不能传入循环轮次。
 
 `runStream(...)` 在当前线程通过必填回调立即交付 `TextDelta`，并在某轮 SSE 结束后才按调用索引聚合结构化工具分片、校验完整 JSON 参数和执行工具。回调还会收到 `ToolCallReady` 与 `ToolExecutionFinished` 状态；默认不传递工具参数或结果正文。工具调用缺少 ID/名称、参数不是 JSON 对象，或流中出现错误时，Agent 会返回失败且不会执行该轮工具。
 

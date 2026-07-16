@@ -29,7 +29,7 @@ namespace {
 // 未知工具的测试锁定复用 ToolRegistry 既有失败语义，避免 Agent 产生第二套错误协议。
 // Medium 工具测试同时验证请求过滤和执行前拦截，覆盖模型直接臆造未展示工具的场景。
 // 测试用处理函数调用计数证明被拒绝的工具没有产生真实本地副作用。
-// 熔断测试提供恰好 16 个 Tool Call 响应，验证 Agent 不发起第 17 次模型请求。
+// 熔断测试提供恰好 1024 个 Tool Call 响应，验证 Agent 不发起第 1025 次模型请求。
 // 熔断阈值由生产实现内部常量控制，测试只观察对外的确定性结果而不依赖私有成员。
 // 空输入测试确认参数错误在 Provider 之前收敛，避免无效输入产生网络成本或 Trace 噪声。
 // 工作区选项测试分别构造有无根目录的 Agent，确保文件能力不是静态链接后的默认权限。
@@ -55,7 +55,7 @@ namespace {
 // 当前所有工具调用按 ToolExecutor 的串行语义执行，本测试不暗示并行 Tool Call 支持。
 // 普通 run 不记录 Trace 的事实由 API 文档表达；此处只验证显式 Trace 重载的正向契约。
 // 已禁用 Trace 的客户端会降级到既有公开入口，该行为由 Trace 模块测试而非本文件重复覆盖。
-// 未来增加取消、超时或预算对象时应独立测试，不应改变本文件固定的 16 次安全熔断验收。
+// 未来增加取消、超时或预算对象时应独立测试，不应改变本文件固定的 1024 次安全熔断验收。
 // 测试中的临时工作区根使用系统临时目录，其内容不会通过模型请求读取或列举。
 // 工作区工具注册顺序被断言，因为 ToolRegistry 的稳定顺序是模型工具输入的一部分。
 // Low 风险策略只看 ToolRiskLevel，测试避免根据工具名称推断允许性，保持策略可扩展。
@@ -331,10 +331,10 @@ TEST(SimpleAgentTest, HidesAndRejectsNonLowRiskTools) {
     EXPECT_NE(provider->requests[1].messages.back().content.find("拒绝执行非低风险工具"), std::string::npos);
 }
 
-// 连续 16 次工具调用后，Agent 必须停止，而不是把模型输出转化为无限请求和副作用。
+// 连续 1024 次工具调用后，Agent 必须停止，而不是把模型输出转化为无限请求和副作用。
 TEST(SimpleAgentTest, StopsAtInternalSafetyFuse) {
     std::vector<aiSDK::ChatResponse> responses;
-    for(std::size_t index = 0U; index < 16U; ++index) {
+    for(std::size_t index = 0U; index < 1024U; ++index) {
         responses.push_back(toolCallResponse("call-" + std::to_string(index), "noop"));
     }
     const auto provider = std::make_shared<ScriptedProvider>(std::move(responses));
@@ -346,7 +346,7 @@ TEST(SimpleAgentTest, StopsAtInternalSafetyFuse) {
     EXPECT_FALSE(result.success);
     EXPECT_TRUE(result.final_answer.empty());
     EXPECT_NE(result.error_message.find("安全熔断"), std::string::npos);
-    EXPECT_EQ(provider->requests.size(), 16U);
+    EXPECT_EQ(provider->requests.size(), 1024U);
 }
 
 // 空输入在发起模型请求前失败，避免把没有语义的任务送入 Provider。
@@ -658,11 +658,11 @@ TEST(SimpleAgentTest, RejectsNonLowStreamingToolAndAllowsFinalResponse) {
     EXPECT_EQ(events[2].type, aiSDK::AgentStreamEventType::TextDelta);
 }
 
-// 每一轮都以完整的低风险调用结束时，流式入口也必须在第 16 次请求后触发同一安全熔断。
-// 该用例不依赖私有常量，只观察请求数量和没有第 17 次副作用的公开结果。
+// 每一轮都以完整的低风险调用结束时，流式入口也必须在第 1024 次请求后触发同一安全熔断。
+// 该用例不依赖私有常量，只观察请求数量和没有第 1025 次副作用的公开结果。
 TEST(SimpleAgentTest, StopsStreamingAtInternalSafetyFuse) {
     std::vector<std::vector<aiSDK::StreamEvent>> responses;
-    for(std::size_t index = 0U; index < 16U; ++index) {
+    for(std::size_t index = 0U; index < 1024U; ++index) {
         responses.push_back({
             toolCallDeltaEvent({
                                 aiSDK::ToolCallDelta{0U, "call-" + std::to_string(index), std::string("noop"), "{}"},
@@ -681,7 +681,7 @@ TEST(SimpleAgentTest, StopsStreamingAtInternalSafetyFuse) {
     EXPECT_FALSE(result.success);
     EXPECT_TRUE(result.final_answer.empty());
     EXPECT_NE(result.error_message.find("安全熔断"), std::string::npos);
-    EXPECT_EQ(provider->requests.size(), 16U);
+    EXPECT_EQ(provider->requests.size(), 1024U);
 }
 
 // 参数错误和缺失回调均须在 Provider 之前返回，避免无消费者的网络流或 Trace 噪声。

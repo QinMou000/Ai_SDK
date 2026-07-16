@@ -15,7 +15,7 @@
 namespace aiSDK {
 namespace {
 
-constexpr std::size_t kMaxModelRequests = 16U;
+constexpr std::size_t kMaxModelRequests = 1024U;
 // 该常量是服务端模型失控时的保护阈值，而不是调用方可调的业务轮次参数。
 // 保持内部常量能防止不同调用点因传入不一致的预算得到难以审计的权限行为。
 

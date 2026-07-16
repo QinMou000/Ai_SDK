@@ -29,7 +29,7 @@
 - 流式工具参数或结果正文不得默认经 callback 泄露。参数校验通过后发出 `ToolCallReady`；每个串行执行结果回填 ToolMessage 后发出 `ToolExecutionFinished`，并以 `success` 表示结果状态。
 - 每轮只把 `ToolRiskLevel::Low` 工具放入 `ChatRequest::tools`。模型直接请求已注册的 `Medium` 或 `High` 工具时，不得执行 handler，必须回填失败 Observation。
 - 未知工具和工具 handler 失败继续委托既有 `ToolExecutor` 收敛为失败结果，Agent 不得因此提前终止循环。
-- 公开 `run` 不接收循环轮次。内部最多请求模型 16 次；第 16 次仍返回 Tool Call 时，返回失败 `AgentResult`，不得发起第 17 次请求。
+- 公开 `run` 不接收循环轮次。内部最多请求模型 1024 次；第 1024 次仍返回 Tool Call 时，返回失败 `AgentResult`，不得发起第 1025 次请求。
 - 显式 Trace 重载只复用调用方传入的 `TraceSession`，使模型请求和工具批次写入同一会话；Agent 不创建隐式 Trace 会话或自定义步骤类型。
 
 ### 4. 校验与错误矩阵
@@ -43,7 +43,7 @@
 | 响应不含 Tool Call | 返回 `success == true`，最终答案为响应文本 |
 | Tool handler 失败或工具未知 | 回填失败 ToolMessage，允许下一轮模型生成最终文本 |
 | 模型调用已注册 `Medium`/`High` 工具 | 不执行 handler，回填“拒绝执行非低风险工具”失败结果 |
-| 连续 16 次响应均含 Tool Call | 返回 `success == false` 与内部安全熔断错误 |
+| 连续 1024 次响应均含 Tool Call | 返回 `success == false` 与内部安全熔断错误 |
 
 ### 5. Good / Base / Bad
 
@@ -53,8 +53,8 @@
 
 ### 6. 必要测试
 
-- `tests/agent/simple_agent_test.cpp` 必须覆盖：两轮以上 Tool Call、两次 `run` 历史隔离、未知工具和 handler 失败恢复、风险过滤和直接臆造拦截、16 次熔断、空输入、显式 Trace。
-- 同一文件必须使用脚本化流式 Provider 覆盖：无 Tool Call 文本分片顺序与完整答案、交错工具分片按 index 聚合、参数 JSON 失败和流错误均无工具副作用、`ToolCallReady`/`ToolExecutionFinished` 顺序、流式风险拦截、16 次流式熔断、空 callback 与流式 Trace。
+- `tests/agent/simple_agent_test.cpp` 必须覆盖：两轮以上 Tool Call、两次 `run` 历史隔离、未知工具和 handler 失败恢复、风险过滤和直接臆造拦截、1024 次熔断、空输入、显式 Trace。
+- 同一文件必须使用脚本化流式 Provider 覆盖：无 Tool Call 文本分片顺序与完整答案、交错工具分片按 index 聚合、参数 JSON 失败和流错误均无工具副作用、`ToolCallReady`/`ToolExecutionFinished` 顺序、流式风险拦截、1024 次流式熔断、空 callback 与流式 Trace。
 - 通过可注入 `IModelProvider` 脚本化响应，不依赖 API Key、网络或真实 Provider。
 - 修改工具策略时，同时断言 `ChatRequest::tools` 的可见集合与 handler 实际执行次数。
 

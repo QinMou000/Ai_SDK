@@ -42,7 +42,7 @@
 - `src/agent/SimpleAgent.cpp`
   - 空输入、Provider 或未收敛运行期失败统一收敛为失败 `AgentResult`
   - 已注册的 Medium/High 工具调用返回失败 Observation，不执行 handler
-  - 16 次连续 Tool Call 返回安全熔断失败，不发起第 17 次请求
+  - 1024 次连续 Tool Call 返回安全熔断失败，不发起第 1025 次请求
 - `src/agent/WorkspaceFileTools.cpp`
   - 根目录和重复名称配置错误抛 `std::invalid_argument`
   - 模型路径、文本编码、容量与文件系统运行期失败由 `ToolRegistry` 转为失败 `ToolResult`
