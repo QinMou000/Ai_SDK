@@ -145,24 +145,6 @@ int main(int argc, char** argv) {
                     {"local_time", currentLocalTime()}
                 });
             });
-        client.tools().registerTool(
-            aiSDK::Tool{
-                "add_numbers",
-                "计算两个数的和，不会修改任何状态",
-                nlohmann::json{{"type", "object"},
-                               {"properties", {{"a", {{"type", "number"}}}, {"b", {{"type", "number"}}}}},
-                               {"required", {"a", "b"}},
-                               {"additionalProperties", false}},
-                aiSDK::ToolRiskLevel::Low,
-        },
-            [](const nlohmann::json& arguments) {
-                // 数值结果保持 double，避免示例因整数截断误导后续模型回答。
-                const double left = requiredNumber(arguments, "a");
-                const double right = requiredNumber(arguments, "b");
-                return aiSDK::ToolResult::successResult({
-                    {"sum", left + right}
-                });
-            });
 
         // 工作区根目录是显式授权边界。文件工具全部为 Low，
         // 但只能访问该目录以内的 UTF-8 文本，并会拒绝 .env、.git 和常见私钥路径。
