@@ -120,7 +120,8 @@ class ScriptedProvider final : public aiSDK::IModelProvider {
 
 // toolCallResponse 保持 response.tool_calls 与 assistant 消息中的工具调用一致。
 // OpenAI-compatible 消息序列需要先回填该 assistant 消息，测试因此不能只填快捷字段。
-aiSDK::ChatResponse toolCallResponse(std::string id, std::string name, nlohmann::json arguments = nlohmann::json::object()) {
+aiSDK::ChatResponse toolCallResponse(std::string id, std::string name,
+                                     nlohmann::json arguments = nlohmann::json::object()) {
     aiSDK::ToolCall call{std::move(id), std::move(name), std::move(arguments), ""};
     aiSDK::ChatResponse response;
     response.message = aiSDK::AssistantMessage("");
@@ -145,7 +146,7 @@ void registerLowTool(aiSDK::AIClient& client, const std::string& name) {
     client.tools().registerTool(
         aiSDK::Tool{
             name, "测试低风险工具", nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}},
-              aiSDK::ToolRiskLevel::Low
+            aiSDK::ToolRiskLevel::Low
     },
         [name](const nlohmann::json& arguments) {
             return aiSDK::ToolResult::successResult({
@@ -202,7 +203,7 @@ TEST(SimpleAgentTest, ReturnsToolFailureToModelAndAllowsRecovery) {
     client.tools().registerTool(
         aiSDK::Tool{
             "broken", "会失败的测试工具", nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}},
-              aiSDK::ToolRiskLevel::Low
+            aiSDK::ToolRiskLevel::Low
     },
         [](const nlohmann::json&) { return aiSDK::ToolResult::errorResult("可恢复的测试失败"); });
     aiSDK::SimpleAgent agent(client);
@@ -244,8 +245,9 @@ TEST(SimpleAgentTest, HidesAndRejectsNonLowRiskTools) {
     std::size_t executions = 0U;
     client.tools().registerTool(
         aiSDK::Tool{
-            "medium_tool", "中风险测试工具", nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}},
-              aiSDK::ToolRiskLevel::Medium
+            "medium_tool", "中风险测试工具",
+            nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}},
+            aiSDK::ToolRiskLevel::Medium
     },
         [&executions](const nlohmann::json&) {
             ++executions;
@@ -294,14 +296,16 @@ TEST(SimpleAgentTest, RejectsEmptyInputBeforeCallingProvider) {
 
 // 文件工具只能由构造选项显式开启，默认 Agent 不会因链接到 SDK 就获得文件访问能力。
 TEST(SimpleAgentTest, RegistersWorkspaceFileToolsOnlyWithExplicitRoot) {
-    const auto no_workspace_provider = std::make_shared<ScriptedProvider>(std::vector<aiSDK::ChatResponse>{aiSDK::assistantTextResponse("无文件工具")});
+    const auto no_workspace_provider = std::make_shared<ScriptedProvider>(
+        std::vector<aiSDK::ChatResponse>{aiSDK::assistantTextResponse("无文件工具")});
     aiSDK::AIClient no_workspace_client = makeClient(no_workspace_provider);
     aiSDK::SimpleAgent no_workspace_agent(no_workspace_client);
     ASSERT_TRUE(no_workspace_agent.run("不授权工作区").success);
     ASSERT_EQ(no_workspace_provider->requests.size(), 1U);
     EXPECT_TRUE(no_workspace_provider->requests.front().tools.empty());
 
-    const auto workspace_provider = std::make_shared<ScriptedProvider>(std::vector<aiSDK::ChatResponse>{aiSDK::assistantTextResponse("已授权工作区")});
+    const auto workspace_provider = std::make_shared<ScriptedProvider>(
+        std::vector<aiSDK::ChatResponse>{aiSDK::assistantTextResponse("已授权工作区")});
     aiSDK::AIClient workspace_client = makeClient(workspace_provider);
     aiSDK::SimpleAgentOptions options;
     options.workspace_file_tools = aiSDK::WorkspaceFileToolOptions{std::filesystem::temp_directory_path()};
@@ -309,12 +313,14 @@ TEST(SimpleAgentTest, RegistersWorkspaceFileToolsOnlyWithExplicitRoot) {
     ASSERT_TRUE(workspace_agent.run("授权临时工作区").success);
     ASSERT_EQ(workspace_provider->requests.size(), 1U);
     const std::vector<aiSDK::Tool>& tools = workspace_provider->requests.front().tools;
-    ASSERT_EQ(tools.size(), 5U);
+    ASSERT_EQ(tools.size(), 7U);
     EXPECT_EQ(tools[0].name, "list_directory");
     EXPECT_EQ(tools[1].name, "read_text_file");
     EXPECT_EQ(tools[2].name, "create_text_file");
     EXPECT_EQ(tools[3].name, "write_text_file");
     EXPECT_EQ(tools[4].name, "replace_text_in_file");
+    EXPECT_EQ(tools[5].name, "find_files");
+    EXPECT_EQ(tools[6].name, "search_text");
 }
 
 // 显式 Trace 重载应把两次模型调用和一批工具执行写入同一调用方会话。

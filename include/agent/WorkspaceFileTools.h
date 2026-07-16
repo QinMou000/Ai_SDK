@@ -14,6 +14,8 @@ struct WorkspaceFileToolOptions {
     std::filesystem::path root;
     std::size_t max_file_bytes = 64U * 1024U;
     std::size_t max_directory_entries = 256U;
+    // max_search_results 限制单次递归搜索回填给模型的命中数量，避免检索结果失控。
+    std::size_t max_search_results = 256U;
 };
 
 // registerWorkspaceFileTools 在注册表中加入受限工作区文件工具。

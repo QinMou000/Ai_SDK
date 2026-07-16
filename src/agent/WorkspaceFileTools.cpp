@@ -7,6 +7,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -50,14 +51,14 @@ namespace fs = std::filesystem;
 // 文件系统在进程外仍可能并发变化，路径解析和实际 I/O 之间不能承诺事务性隔离。
 // 当文件被并发删除、截断或替换时，工具宁可返回失败，也不把不完整内容当作成功 Observation。
 // 本实现不创建父目录；目录结构属于调用方或模型经明确工具能力之外的预先准备工作。
-// 根目录本身可以用于 list_directory，但不能作为 read、write、create 或 replace 的文件路径。
+// 根目录本身可以用于 list_directory、find_files 与 search_text，但不能作为读写文件路径。
 // 所有文件名比较仅为敏感规则做 ASCII 小写化，不会修改真实路径的大小写或 Unicode 语义。
 // 路径显示使用 generic_string，便于模型在不同平台上获得稳定的正斜杠相对路径。
 // 目录输出按路径排序，避免底层文件系统迭代顺序让模型输入和测试结果不稳定。
 // 模型传入的 JSON 只读取规定字符串字段，缺失或类型不匹配由参数边界立即拒绝。
 // 工具 Schema 关闭 additionalProperties，指导支持 Schema 的模型不要发送未实现参数。
 // 运行时仍手工检查字段，因为模型输出属于不可信输入，Schema 不能替代本地校验。
-// 目录工具允许省略 path 表示根目录，这是唯一允许空路径的操作语义。
+// 目录列举与两项搜索允许省略 path 表示根目录，文件读写操作仍拒绝空路径。
 // 其他文件工具拒绝空路径，避免把文件操作悄然解释成工作区根目录。
 // 路径含 NUL 被拒绝，防止不同运行库在路径末尾截断后看到与校验不同的对象。
 // Windows 根名称和根目录分别检查，确保盘符、UNC 路径等绝对形式不会进入拼接逻辑。
@@ -104,9 +105,10 @@ namespace fs = std::filesystem;
 struct WorkspaceContext {
     // root 已是 canonical 目录，后续 helper 不接受外部未规范化根目录。
     fs::path root;
-    // 两个配额均按字节或条目计数，避免把模型 token 估算引入文件系统边界。
+    // 配额按字节、目录条目或搜索命中计数，避免把模型 token 估算引入文件系统边界。
     std::size_t max_file_bytes = 0U;
     std::size_t max_directory_entries = 0U;
+    std::size_t max_search_results = 0U;
 };
 
 // lowerAscii 只接收从 path::string 得到的字节序列，敏感名称本身均为 ASCII。
@@ -185,6 +187,33 @@ std::string optionalString(const nlohmann::json& arguments, const char* key) {
         throw std::invalid_argument(std::string("工具参数必须是字符串: ") + key);
     }
     return arguments.at(key).get<std::string>();
+}
+
+std::size_t optionalSearchResultLimit(const nlohmann::json& arguments, std::size_t configured_limit) {
+    // 单次调用可请求更小的结果集，但不能借此突破调用方在注册阶段设定的总配额。
+    // 显式拒绝浮点、负数和零，避免 JSON 数值转换产生平台相关的截断或绕过行为。
+    if(!arguments.contains("max_results")) {
+        return configured_limit;
+    }
+
+    const nlohmann::json& value = arguments.at("max_results");
+    std::uintmax_t requested = 0U;
+    if(value.is_number_unsigned()) {
+        requested = value.get<std::uintmax_t>();
+    } else if(value.is_number_integer()) {
+        const std::intmax_t signed_value = value.get<std::intmax_t>();
+        if(signed_value <= 0) {
+            throw std::invalid_argument("搜索结果上限必须是正整数");
+        }
+        requested = static_cast<std::uintmax_t>(signed_value);
+    } else {
+        throw std::invalid_argument("搜索结果上限必须是正整数");
+    }
+
+    if(requested == 0U || requested > configured_limit) {
+        throw std::invalid_argument("搜索结果上限超出工作区工具限制");
+    }
+    return static_cast<std::size_t>(requested);
 }
 
 fs::path relativePathFromString(const std::string& value, bool allow_empty) {
@@ -334,6 +363,17 @@ bool isValidUtf8(const std::string& value) {
     return true;
 }
 
+void validateSearchQuery(const std::string& query, bool required) {
+    // 查询同样会进入 ToolMessage 与结果上下文，因此拒绝 NUL 和非法 UTF-8，
+    // 不让文本匹配的字节语义成为绕开工作区文本边界的例外通道。
+    if(required && query.empty()) {
+        throw std::invalid_argument("搜索文本不能为空");
+    }
+    if(!isValidUtf8(query)) {
+        throw std::invalid_argument("搜索文本必须是无 NUL 的 UTF-8 字符串");
+    }
+}
+
 std::string readUtf8TextFile(const WorkspaceContext& context, const fs::path& path) {
     // file_size 在打开前用于容量预算；随后的定长读取仍检查实际字节数以防并发截断。
     // streamsize 上限额外检查使可配置配额不会在 size_t 到流接口转换时发生截断。
@@ -396,6 +436,116 @@ std::string relativeDisplayPath(const WorkspaceContext& context, const fs::path&
     return path.lexically_relative(context.root).generic_string();
 }
 
+// visitSafeRegularFiles 在递归进入每一层目录前再次验证真实目标。
+// 标准符号链接永不跟随；Windows 目录联接点等特殊目录若最终目标越界或敏感，
+// 也会在 disable_recursion_pending 后跳过，不能借递归遍历扩大授权范围。
+// visitor 返回 false 表示调用方已得到足够命中，遍历立即结束以限制不必要的 I/O。
+template <typename Visitor>
+void visitSafeRegularFiles(const WorkspaceContext& context, const fs::path& directory, Visitor visitor) {
+    std::error_code error;
+    fs::recursive_directory_iterator iterator(directory, error);
+    if(error) {
+        throw std::runtime_error("遍历目录失败: " + directory.string());
+    }
+
+    const fs::recursive_directory_iterator end;
+    while(iterator != end) {
+        const fs::directory_entry entry = *iterator;
+        std::error_code entry_error;
+        if(entry.is_symlink(entry_error)) {
+            if(entry_error) {
+                throw std::runtime_error("读取目录条目失败: " + entry.path().string());
+            }
+            iterator.disable_recursion_pending();
+        } else {
+            const fs::path normalized = fs::canonical(entry.path(), entry_error);
+            if(entry_error) {
+                // 目录在遍历期间被删除或无法规范化时不暴露其名称，也不继续进入该节点。
+                iterator.disable_recursion_pending();
+            } else if(!isWithinRoot(context.root, normalized) || isSensitivePath(context.root, normalized) ||
+                      isSensitivePath(context.root, entry.path())) {
+                // 敏感目录和根外重解析点既不产生结果，也不能成为后续递归的父节点。
+                iterator.disable_recursion_pending();
+            } else {
+                const bool is_directory = fs::is_directory(normalized, entry_error);
+                if(entry_error) {
+                    throw std::runtime_error("读取目录条目类型失败: " + entry.path().string());
+                }
+                if(!is_directory) {
+                    const bool is_regular_file = fs::is_regular_file(normalized, entry_error);
+                    if(entry_error) {
+                        throw std::runtime_error("读取目录条目类型失败: " + entry.path().string());
+                    }
+                    if(is_regular_file && !visitor(normalized)) {
+                        return;
+                    }
+                }
+            }
+        }
+
+        iterator.increment(error);
+        if(error) {
+            throw std::runtime_error("遍历目录失败: " + directory.string());
+        }
+    }
+}
+
+bool tryReadSearchTextFile(const WorkspaceContext& context, const fs::path& path, std::string& content) {
+    // 搜索面对的是整棵目录树；单个超限、二进制、锁定或并发变化文件不应让其他可读文本失去结果。
+    // 显式读工具仍保留失败语义，只有搜索这一“尽力发现”操作把单文件读取失败收敛为跳过。
+    try {
+        content = readUtf8TextFile(context, path);
+        return true;
+    } catch(const std::runtime_error&) {
+        return false;
+    }
+}
+
+std::size_t utf8CodePointCount(std::string_view value) {
+    // 调用点已经验证整行是 UTF-8；续字节不代表新的 Unicode 码点，
+    // 因此只需计数非续字节即可给出对中文文本稳定的从 1 开始列号。
+    std::size_t count = 0U;
+    for(const unsigned char character : value) {
+        if((character & 0xC0U) != 0x80U) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+bool isUtf8ContinuationByte(char value) {
+    return (static_cast<unsigned char>(value) & 0xC0U) == 0x80U;
+}
+
+std::string linePreview(const std::string& line, std::size_t match_offset) {
+    // 单行也可能接近单文件上限；预览围绕命中位置裁剪为固定字节预算，
+    // 同时退回到 UTF-8 码点边界，保证返回值本身仍可直接传给模型。
+    constexpr std::size_t kMaxPreviewBytes = 512U;
+    if(line.size() <= kMaxPreviewBytes) {
+        return line;
+    }
+
+    std::size_t start = match_offset > kMaxPreviewBytes / 2U ? match_offset - kMaxPreviewBytes / 2U : 0U;
+    while(start > 0U && isUtf8ContinuationByte(line[start])) {
+        --start;
+    }
+
+    std::size_t end = std::min(line.size(), start + kMaxPreviewBytes);
+    while(end < line.size() && isUtf8ContinuationByte(line[end])) {
+        --end;
+    }
+
+    std::string preview;
+    if(start > 0U) {
+        preview += "...";
+    }
+    preview.append(line, start, end - start);
+    if(end < line.size()) {
+        preview += "...";
+    }
+    return preview;
+}
+
 Tool makeTool(std::string name, std::string description, nlohmann::json parameters) {
     // 文件工具风险等级在单一工厂处固定，新增工具时不应遗漏与 Agent 策略相配套的元数据。
     // handler 不保存在 Tool 对象中，真实执行函数仍由 ToolRegistry 按相同名称单独维护。
@@ -407,13 +557,19 @@ Tool makeTool(std::string name, std::string description, nlohmann::json paramete
 void registerWorkspaceFileTools(ToolRegistry& registry, const WorkspaceFileToolOptions& options) {
     // 零配额通常是调用方配置遗漏；注册阶段拒绝比让每次模型调用都失败更容易诊断。
     // canonicalRoot 在任何 Tool 对象注册前执行，根目录无效时注册表保持完全不变。
-    if(options.max_file_bytes == 0U || options.max_directory_entries == 0U) {
+    if(options.max_file_bytes == 0U || options.max_directory_entries == 0U || options.max_search_results == 0U) {
         throw std::invalid_argument("工作区文件工具限制必须大于零");
     }
 
-    WorkspaceContext context{canonicalRoot(options.root), options.max_file_bytes, options.max_directory_entries};
+    WorkspaceContext context{
+        canonicalRoot(options.root),
+        options.max_file_bytes,
+        options.max_directory_entries,
+        options.max_search_results,
+    };
     const std::vector<std::string> names{
-        "list_directory", "read_text_file", "create_text_file", "write_text_file", "replace_text_in_file",
+        "list_directory",       "read_text_file", "create_text_file", "write_text_file",
+        "replace_text_in_file", "find_files",     "search_text",
     };
     for(const std::string& name : names) {
         // ToolRegistry 对同名注册支持替换，但文件工具需要成套一致语义，因此选择显式拒绝占用。
@@ -583,6 +739,124 @@ void registerWorkspaceFileTools(ToolRegistry& registry, const WorkspaceFileToolO
                 {"path", relativeDisplayPath(context, path)},
                 {"bytes", content.size()},
                 {"action", "replaced"},
+            });
+        });
+
+    registry.registerTool(
+        makeTool(
+            "find_files", "递归查找工作区内文件名包含指定文本的普通文件，不会访问链接或受保护位置。",
+            nlohmann::json{
+                {"type",                 "object"                                                                              },
+                {"properties",
+                 {{"path", {{"type", "string"}, {"description", "工作区内的相对起始目录，省略时表示根目录"}}},
+                  {"query",
+                   {{"type", "string"}, {"description", "文件名必须包含的 UTF-8 文本，省略或为空时匹配全部文件"}}},
+                  {"max_results", {{"type", "integer"}, {"minimum", 1}, {"description", "本次最多返回的命中数量"}}}}},
+                {"additionalProperties", false                                                                                 },
+    }),
+        [context](const nlohmann::json& arguments) {
+            // find_files 只按文件名做字面量匹配，不把 glob、正则或平台大小写规则隐式混入首版协议。
+            const fs::path directory = resolveExistingPath(context, optionalString(arguments, "path"), true);
+            const std::string query = optionalString(arguments, "query");
+            validateSearchQuery(query, false);
+            const std::size_t result_limit = optionalSearchResultLimit(arguments, context.max_search_results);
+
+            std::vector<std::string> files;
+            bool truncated = false;
+            visitSafeRegularFiles(context, directory, [&](const fs::path& path) {
+                // u8string 避免 Windows 当前代码页把非 ASCII 文件名转换为不稳定窄字符串，
+                // 使模型传入的 UTF-8 查询与文件名比较保持同一编码语义。
+                if(path.filename().u8string().find(query) == std::string::npos) {
+                    return true;
+                }
+                if(files.size() >= result_limit) {
+                    truncated = true;
+                    return false;
+                }
+                files.push_back(relativeDisplayPath(context, path));
+                return true;
+            });
+            std::sort(files.begin(), files.end());
+            return ToolResult::successResult({
+                {"path", relativeDisplayPath(context, directory)},
+                {"files", files},
+                {"truncated", truncated},
+            });
+        });
+
+    registry.registerTool(
+        makeTool(
+            "search_text", "递归搜索工作区内 UTF-8 文本文件的字面量，返回命中的文件、行号、列号和受限文本预览。",
+            nlohmann::json{
+                {"type",                 "object"                                                                              },
+                {"properties",
+                 {{"path", {{"type", "string"}, {"description", "工作区内的相对起始目录，省略时表示根目录"}}},
+                  {"query", {{"type", "string"}, {"description", "必须匹配的非空 UTF-8 文本"}}},
+                  {"max_results", {{"type", "integer"}, {"minimum", 1}, {"description", "本次最多返回的命中数量"}}}}},
+                {"required",             {"query"}                                                                             },
+                {"additionalProperties", false                                                                                 },
+    }),
+        [context](const nlohmann::json& arguments) {
+            // search_text 每行只回填最早的一处命中，防止重复字符的单行文件耗尽全部结果预算。
+            const fs::path directory = resolveExistingPath(context, optionalString(arguments, "path"), true);
+            const std::string query = requiredString(arguments, "query");
+            validateSearchQuery(query, true);
+            const std::size_t result_limit = optionalSearchResultLimit(arguments, context.max_search_results);
+
+            std::vector<nlohmann::json> matches;
+            std::size_t skipped_files = 0U;
+            bool truncated = false;
+            visitSafeRegularFiles(context, directory, [&](const fs::path& path) {
+                std::string content;
+                if(!tryReadSearchTextFile(context, path, content)) {
+                    ++skipped_files;
+                    return true;
+                }
+
+                std::size_t line_start = 0U;
+                std::size_t line_number = 1U;
+                while(line_start <= content.size()) {
+                    const std::size_t newline = content.find('\n', line_start);
+                    std::size_t line_end = newline == std::string::npos ? content.size() : newline;
+                    if(line_end > line_start && content[line_end - 1U] == '\r') {
+                        --line_end;
+                    }
+                    const std::string line = content.substr(line_start, line_end - line_start);
+                    const std::size_t match_offset = line.find(query);
+                    if(match_offset != std::string::npos) {
+                        if(matches.size() >= result_limit) {
+                            truncated = true;
+                            return false;
+                        }
+                        matches.push_back({
+                            {"path", relativeDisplayPath(context, path)},
+                            {"line", line_number},
+                            {"column", utf8CodePointCount(std::string_view(line).substr(0U, match_offset)) + 1U},
+                            {"text", linePreview(line, match_offset)},
+                        });
+                    }
+
+                    if(newline == std::string::npos) {
+                        break;
+                    }
+                    line_start = newline + 1U;
+                    ++line_number;
+                }
+                return true;
+            });
+            std::sort(matches.begin(), matches.end(), [](const nlohmann::json& left, const nlohmann::json& right) {
+                const std::string& left_path = left.at("path").get_ref<const std::string&>();
+                const std::string& right_path = right.at("path").get_ref<const std::string&>();
+                if(left_path != right_path) {
+                    return left_path < right_path;
+                }
+                return left.at("line").get<std::size_t>() < right.at("line").get<std::size_t>();
+            });
+            return ToolResult::successResult({
+                {"path", relativeDisplayPath(context, directory)},
+                {"matches", matches},
+                {"skipped_files", skipped_files},
+                {"truncated", truncated},
             });
         });
 }

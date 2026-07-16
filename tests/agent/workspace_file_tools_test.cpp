@@ -56,7 +56,7 @@ namespace fs = std::filesystem;
 // 每个夹具实例拥有独立根目录和 ToolRegistry，避免目录状态或工具注册顺序跨用例泄漏。
 // 文件操作均通过 ToolRegistry::execute 触发，覆盖模型 Tool Call 最终进入的同一处理函数边界。
 // 测试不直接调用 WorkspaceFileTools.cpp 的内部 helper，防止绕过 JSON 参数和异常收敛协议。
-// 成功路径验证五项工具可以组成“创建—读取—覆盖—唯一替换—列举”的最小文件工作流。
+// 成功路径验证基础写入工具可组成“创建—读取—覆盖—唯一替换—列举”的最小文件工作流。
 // 创建语义与覆盖语义分别断言，避免未来实现把不存在目标或已存在目标静默处理成另一种动作。
 // 替换测试覆盖零匹配、多匹配和空查找串，防止模糊替换扩大文件改动范围。
 // 安全路径测试传入绝对路径和 .. 路径，验证路径策略不能依赖模型遵守“相对路径”工具描述。
@@ -72,7 +72,7 @@ namespace fs = std::filesystem;
 // 清理失败保留为测试断言，避免测试环境无声积累大量临时文件影响后续运行。
 // uniqueWorkspacePath 基于单调时钟生成目录名，避免依赖用户名、当前仓库路径或固定测试端口。
 // 测试根内先创建 notes 目录，因为生产工具刻意不会隐式创建父目录。
-// 工具定义测试固定检查五项名称与 Low 等级，锁定 Agent 看到的稳定注册顺序和权限元数据。
+// 工具定义测试固定检查全部名称与 Low 等级，锁定 Agent 看到的稳定注册顺序和权限元数据。
 // 注册失败测试验证空根目录与同名工具不会产生不可诊断或半注册的文件工具状态。
 // 测试不覆盖删除、移动、复制或权限修改，因为这些能力被需求明确排除且未注册工具。
 // 测试不覆盖二进制写入成功，因为生产契约明确只接受无 NUL 的 UTF-8 文本。
@@ -175,12 +175,13 @@ class WorkspaceFileToolsTest : public ::testing::Test {
     aiSDK::ToolRegistry registry_;
 };
 
-// 注册的五项工具都必须是 Low，风险策略由 Agent 层统一筛选而不是文件工具各自特判。
-TEST_F(WorkspaceFileToolsTest, RegistersFiveLowRiskTools) {
+// 注册的七项工具都必须是 Low，风险策略由 Agent 层统一筛选而不是文件工具各自特判。
+TEST_F(WorkspaceFileToolsTest, RegistersSevenLowRiskTools) {
     const std::vector<aiSDK::Tool> tools = registry_.listTools();
-    ASSERT_EQ(tools.size(), 5U);
+    ASSERT_EQ(tools.size(), 7U);
     const std::vector<std::string> names{
-        "list_directory", "read_text_file", "create_text_file", "write_text_file", "replace_text_in_file",
+        "list_directory",       "read_text_file", "create_text_file", "write_text_file",
+        "replace_text_in_file", "find_files",     "search_text",
     };
     for(std::size_t index = 0U; index < names.size(); ++index) {
         EXPECT_EQ(tools[index].name, names[index]);
@@ -188,12 +189,131 @@ TEST_F(WorkspaceFileToolsTest, RegistersFiveLowRiskTools) {
     }
 }
 
+// find_files 仅发现普通文件并使用稳定排序，模型可先缩小目录或关键词后再读取明确目标。
+// max_results 只减少本次回填量，达到上限后通过 truncated 明确告知结果并不完整。
+TEST_F(WorkspaceFileToolsTest, FindsNestedFilesInStableOrderAndReportsTruncation) {
+    std::error_code error;
+    ASSERT_TRUE(fs::create_directories(root_ / "notes" / "nested", error));
+    ASSERT_FALSE(error);
+    {
+        std::ofstream nested(root_ / "notes" / "nested" / "a-report.md", std::ios::binary);
+        ASSERT_TRUE(nested);
+        nested << "嵌套报告";
+    }
+    {
+        std::ofstream direct(root_ / "notes" / "z-report.md", std::ios::binary);
+        ASSERT_TRUE(direct);
+        direct << "直接报告";
+    }
+
+    const aiSDK::ToolResult found = call("find_files", {
+                                                           {"path",  "notes" },
+                                                           {"query", "report"}
+    });
+    ASSERT_TRUE(found.success) << found.error_message;
+    ASSERT_EQ(found.data.at("files").size(), 2U);
+    EXPECT_EQ(found.data.at("files")[0], "notes/nested/a-report.md");
+    EXPECT_EQ(found.data.at("files")[1], "notes/z-report.md");
+    EXPECT_FALSE(found.data.at("truncated"));
+
+    const aiSDK::ToolResult limited =
+        call("find_files", {
+                               {"path",        "notes" },
+                               {"query",       "report"},
+                               {"max_results", 1       }
+    });
+    ASSERT_TRUE(limited.success) << limited.error_message;
+    EXPECT_EQ(limited.data.at("files").size(), 1U);
+    EXPECT_TRUE(limited.data.at("truncated"));
+    EXPECT_FALSE(call("find_files",
+                      {
+                          {"path", "../outside"}
+    })
+                     .success);
+    EXPECT_FALSE(call("find_files",
+                      {
+                          {"max_results", 0}
+    })
+                     .success);
+}
+
+// search_text 返回从 1 开始的 UTF-8 码点列号，而不是中文字符在 UTF-8 中占用的字节偏移。
+// 非文本和超限文件会被计数后跳过，保证无关文件不会阻断其他合法文本的检索结果。
+TEST_F(WorkspaceFileToolsTest, SearchesUtf8TextAndSkipsUnsupportedFiles) {
+    std::error_code error;
+    ASSERT_TRUE(fs::create_directories(root_ / "notes" / "nested", error));
+    ASSERT_FALSE(error);
+    {
+        std::ofstream first(root_ / "notes" / "first.txt", std::ios::binary);
+        ASSERT_TRUE(first);
+        first << "首行\r\n前缀定位文本\r\n重复定位文本\n";
+    }
+    {
+        std::ofstream nested(root_ / "notes" / "nested" / "second.md", std::ios::binary);
+        ASSERT_TRUE(nested);
+        nested << "定位在首列";
+    }
+    {
+        std::ofstream binary(root_ / "notes" / "binary.dat", std::ios::binary);
+        ASSERT_TRUE(binary);
+        binary.write("\xFF\xFE", 2);
+    }
+    {
+        std::ofstream oversized(root_ / "notes" / "oversized.txt", std::ios::binary);
+        ASSERT_TRUE(oversized);
+        oversized << std::string(64U * 1024U + 1U, 'x');
+    }
+    {
+        std::ofstream sensitive(root_ / ".env", std::ios::binary);
+        ASSERT_TRUE(sensitive);
+        sensitive << "定位不应暴露";
+    }
+
+    const aiSDK::ToolResult searched = call("search_text", {
+                                                               {"path",  "notes" },
+                                                               {"query", "定位"}
+    });
+    ASSERT_TRUE(searched.success) << searched.error_message;
+    ASSERT_EQ(searched.data.at("matches").size(), 3U);
+    EXPECT_EQ(searched.data.at("matches")[0].at("path"), "notes/first.txt");
+    EXPECT_EQ(searched.data.at("matches")[0].at("line"), 2U);
+    EXPECT_EQ(searched.data.at("matches")[0].at("column"), 3U);
+    EXPECT_EQ(searched.data.at("matches")[0].at("text"), "前缀定位文本");
+    EXPECT_EQ(searched.data.at("matches")[1].at("line"), 3U);
+    EXPECT_EQ(searched.data.at("matches")[2].at("path"), "notes/nested/second.md");
+    EXPECT_EQ(searched.data.at("matches")[2].at("column"), 1U);
+    EXPECT_EQ(searched.data.at("skipped_files"), 2U);
+    EXPECT_FALSE(searched.data.at("truncated"));
+
+    const aiSDK::ToolResult limited =
+        call("search_text", {
+                                {"path",        "notes" },
+                                {"query",       "定位"},
+                                {"max_results", 2       }
+    });
+    ASSERT_TRUE(limited.success) << limited.error_message;
+    EXPECT_EQ(limited.data.at("matches").size(), 2U);
+    EXPECT_TRUE(limited.data.at("truncated"));
+    EXPECT_FALSE(call("search_text",
+                      {
+                          {"query", ""}
+    })
+                     .success);
+    EXPECT_FALSE(call("search_text",
+                      {
+                          {"path",  "../outside"},
+                          {"query", "定位"    }
+    })
+                     .success);
+}
+
 // 完整成功路径覆盖新建、读取、覆盖、唯一替换和单层目录列举。
 // 每步都经过真实参数 Schema 及路径解析，确保文件工具能形成 Agent 的最小闭环。
 TEST_F(WorkspaceFileToolsTest, CreatesReadsWritesReplacesAndListsTextFiles) {
-    const aiSDK::ToolResult created = call("create_text_file", {
-                                                                   {"path",    "notes/task.txt"},
-                                                                   {"content", "初始内容"  }
+    const aiSDK::ToolResult created =
+        call("create_text_file", {
+                                     {"path",    "notes/task.txt"},
+                                     {"content", "初始内容"  }
     });
     ASSERT_TRUE(created.success);
     EXPECT_EQ(created.data.at("action"), "created");
@@ -204,17 +324,19 @@ TEST_F(WorkspaceFileToolsTest, CreatesReadsWritesReplacesAndListsTextFiles) {
     ASSERT_TRUE(read.success) << read.error_message;
     EXPECT_EQ(read.data.at("content"), "初始内容");
 
-    const aiSDK::ToolResult written = call("write_text_file", {
-                                                                  {"path",    "notes/task.txt" },
-                                                                  {"content", "待替换内容"}
+    const aiSDK::ToolResult written =
+        call("write_text_file", {
+                                    {"path",    "notes/task.txt" },
+                                    {"content", "待替换内容"}
     });
     ASSERT_TRUE(written.success);
     EXPECT_EQ(written.data.at("action"), "written");
 
-    const aiSDK::ToolResult replaced = call("replace_text_in_file", {
-                                                                        {"path",    "notes/task.txt"},
-                                                                        {"search",  "待替换"     },
-                                                                        {"replace", "已经替换"  }
+    const aiSDK::ToolResult replaced =
+        call("replace_text_in_file", {
+                                         {"path",    "notes/task.txt"},
+                                         {"search",  "待替换"     },
+                                         {"replace", "已经替换"  }
     });
     ASSERT_TRUE(replaced.success);
     EXPECT_EQ(replaced.data.at("action"), "replaced");
@@ -328,6 +450,11 @@ TEST_F(WorkspaceFileToolsTest, RejectsRootEscapeAndSensitivePaths) {
     })
                      .success);
 
+    const aiSDK::ToolResult found = call("find_files", nlohmann::json::object());
+    ASSERT_TRUE(found.success) << found.error_message;
+    ASSERT_EQ(found.data.at("files").size(), 1U);
+    EXPECT_EQ(found.data.at("files")[0], "notes/visible.txt");
+
     const aiSDK::ToolResult listed = call("list_directory", nlohmann::json::object());
     ASSERT_TRUE(listed.success);
     ASSERT_EQ(listed.data.at("entries").size(), 1U);
@@ -416,6 +543,20 @@ TEST_F(WorkspaceFileToolsTest, RejectsDirectoryLinkEscapeWhenPlatformAllowsIt) {
                           {"path", "notes/escape/secret.txt"}
     })
                      .success);
+
+    const aiSDK::ToolResult found = call("find_files", {
+                                                           {"path",  "notes" },
+                                                           {"query", "secret"}
+    });
+    ASSERT_TRUE(found.success) << found.error_message;
+    EXPECT_TRUE(found.data.at("files").empty());
+
+    const aiSDK::ToolResult searched = call("search_text", {
+                                                               {"path",  "notes"       },
+                                                               {"query", "工作区外"}
+    });
+    ASSERT_TRUE(searched.success) << searched.error_message;
+    EXPECT_TRUE(searched.data.at("matches").empty());
     EXPECT_TRUE(fs::remove(link, error));
     EXPECT_FALSE(error);
     fs::remove_all(outside, error);
@@ -431,13 +572,18 @@ TEST(WorkspaceFileToolsRegistrationTest, RejectsInvalidRootAndDuplicateNames) {
     std::error_code error;
     ASSERT_TRUE(fs::create_directories(root, error));
     ASSERT_FALSE(error);
+    aiSDK::WorkspaceFileToolOptions invalid_limit{root};
+    invalid_limit.max_search_results = 0U;
+    aiSDK::ToolRegistry limited_registry;
+    EXPECT_THROW(aiSDK::registerWorkspaceFileTools(limited_registry, invalid_limit), std::invalid_argument);
     registry.registerTool(
         aiSDK::Tool{
             "read_text_file", "占用名称", nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}},
-              aiSDK::ToolRiskLevel::Low
+            aiSDK::ToolRiskLevel::Low
     },
         [](const nlohmann::json&) { return aiSDK::ToolResult::successResult(nullptr); });
-    EXPECT_THROW(aiSDK::registerWorkspaceFileTools(registry, aiSDK::WorkspaceFileToolOptions{root}), std::invalid_argument);
+    EXPECT_THROW(aiSDK::registerWorkspaceFileTools(registry, aiSDK::WorkspaceFileToolOptions{root}),
+                 std::invalid_argument);
 
     fs::remove_all(root, error);
     EXPECT_FALSE(error);

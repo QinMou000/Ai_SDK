@@ -316,15 +316,17 @@ std::vector<ToolExecutionResult> results =
 .\build\windows-debug\examples\06_simple_agent\example_simple_agent.exe "请查询当前时间，并计算 12.5 加 7.5"
 ```
 
-示例注册两个业务 `Low` 工具：`get_current_time` 与 `add_numbers`；同时把**启动时的当前工作目录**作为显式工作区根目录，注册以下五个 `Low` 文件工具：
+示例注册两个业务 `Low` 工具：`get_current_time` 与 `add_numbers`；同时把**启动时的当前工作目录**作为显式工作区根目录，注册以下七个 `Low` 文件工具：
 
 * `list_directory`：列出单层目录条目。
 * `read_text_file`：读取 UTF-8 文本文件。
 * `create_text_file`：只新建不存在的文本文件。
 * `write_text_file`：只覆盖已经存在的文本文件。
 * `replace_text_in_file`：只精确替换唯一的一处文本。
+* `find_files`：递归查找文件名包含指定文本的普通文件。
+* `search_text`：递归检索 UTF-8 文本，返回文件相对路径、行号、列号和文本预览。
 
-文件路径必须相对工作区；工具拒绝绝对路径、越界路径、符号链接逃逸、`.git`、`.env`、常见私钥以及非 UTF-8 文本。单个文件和写入内容最大为 64 KiB，目录列表最多返回 256 项。生产调用应传入最小必要的专用目录；若不在 `SimpleAgentOptions` 中提供 `WorkspaceFileToolOptions`，Agent 不会注册任何文件工具。
+文件路径必须相对工作区；工具拒绝绝对路径、越界路径、符号链接逃逸、`.git`、`.env`、常见私钥以及非 UTF-8 文本。单个文件和写入内容最大为 64 KiB，目录列表最多返回 256 项；两项搜索默认最多返回 256 个命中，也可在单次调用中降低 `max_results`。`search_text` 会跳过超限或非 UTF-8 文件，并在结果中标记跳过数量和截断状态。生产调用应传入最小必要的专用目录；若不在 `SimpleAgentOptions` 中提供 `WorkspaceFileToolOptions`，Agent 不会注册任何文件工具。
 
 ```cpp
 AIClient client(config);

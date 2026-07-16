@@ -73,23 +73,26 @@ const AgentResult result = agent.run("整理工作区说明", trace);
 
 ### 1. 作用范围 / 触发条件
 
-- 触发：修改 `WorkspaceFileToolOptions`、`registerWorkspaceFileTools(...)`、五项文件工具 Schema 或路径/文本安全策略。
+- 触发：修改 `WorkspaceFileToolOptions`、`registerWorkspaceFileTools(...)`、工作区文件工具 Schema 或路径/文本安全策略。
 - 目标：仅在调用方显式授权的根目录内，为 Agent 提供小范围 UTF-8 文本操作；文件系统细节不得扩散到 ReAct Loop。
 
 ### 2. 关键签名
 
-- `struct WorkspaceFileToolOptions { std::filesystem::path root; std::size_t max_file_bytes; std::size_t max_directory_entries; }`
+- `struct WorkspaceFileToolOptions { std::filesystem::path root; std::size_t max_file_bytes; std::size_t max_directory_entries; std::size_t max_search_results; }`
 - `void registerWorkspaceFileTools(ToolRegistry& registry, const WorkspaceFileToolOptions& options)`
-- 工具名：`list_directory`、`read_text_file`、`create_text_file`、`write_text_file`、`replace_text_in_file`
+- 工具名：`list_directory`、`read_text_file`、`create_text_file`、`write_text_file`、`replace_text_in_file`、`find_files`、`search_text`
 
 ### 3. 契约
 
-- 未提供 `workspace_file_tools` 时，`SimpleAgent` 不注册任何文件工具；提供有效根目录时，五项工具都以 `Low` 注册。
+- 未提供 `workspace_file_tools` 时，`SimpleAgent` 不注册任何文件工具；提供有效根目录时，七项工具都以 `Low` 注册。
 - 目标路径必须是工作区内相对路径。已有目标以 `canonical` 验证，新建目标以 canonical 父目录加文件名验证，最终路径必须属于授权根目录。
 - 拒绝绝对路径、NUL、根目录逃逸、符号链接/目录联接点逃逸、`.git`、`.env`、`.env.*` 以及常见私钥文件名或扩展名。
-- 只处理无 NUL 的 UTF-8 文本；默认单文件读取、创建、覆盖和替换内容上限 64 KiB，目录列举上限 256 个单层条目。
+- 只处理无 NUL 的 UTF-8 文本；默认单文件读取、创建、覆盖和替换内容上限 64 KiB，目录列举上限 256 个单层条目，单次搜索上限 256 个命中。
 - `list_directory` 除跳过标准符号链接外，还必须对每个条目 `canonical` 最终目标；目录联接点等未被 `is_symlink()` 标识的重解析点若越过根或落在敏感位置，必须隐藏而不是作为可访问目录返回。
 - `create_text_file` 只允许不存在的目标；`write_text_file` 只允许已存在普通文件；`replace_text_in_file` 要求非空查找文本恰好匹配一处。
+- `find_files` 接受可选相对目录 `path`、文件名 UTF-8 字面量 `query` 和不超过配置的 `max_results`；只递归返回安全普通文件的相对路径，并以 `truncated` 标记超出上限的结果。
+- `search_text` 接受可选相对目录 `path`、必填非空 UTF-8 字面量 `query` 和不超过配置的 `max_results`；每行最多返回最早命中，结果项含 `path`、从 1 开始的 UTF-8 码点 `line`/`column` 及受限 `text` 预览。
+- 两项搜索不得跟随符号链接，敏感条目和根外重解析点必须静默隐藏；`search_text` 遇到超限、非 UTF-8、锁定或并发变化文件时跳过该文件继续，并通过 `skipped_files` 说明此类跳过数量。
 - 文件系统并发删除、截断、权限变化或写入失败必须返回失败 ToolResult；首版不承诺跨进程事务、原子替换或备份。
 
 ### 4. 校验与错误矩阵
@@ -104,17 +107,22 @@ const AgentResult result = agent.run("整理工作区说明", trace);
 | 文本非 UTF-8、含 NUL 或超出容量 | 返回失败 `ToolResult` |
 | 替换零处、多处或空查找串 | 返回失败 `ToolResult`，不修改文件 |
 | 目录条目超出限制 | 返回失败 `ToolResult`，不静默截断 |
+| 搜索上限为零、非整数或超过注册配额 | 返回失败 `ToolResult` |
+| `search_text` 查询为空、包含 NUL 或不是 UTF-8 | 返回失败 `ToolResult` |
+| 递归搜索命中超过本次上限 | 返回成功 `ToolResult`，保留前序命中并设 `truncated == true` |
+| 搜索中单个文件超限、非 UTF-8、无法读取或并发变化 | 跳过该文件；其余文件继续，`search_text` 增加 `skipped_files` |
 
 ### 5. Good / Base / Bad
 
-- Good：调用方传入专用目录；模型用 `create_text_file` 新建文件，再用 `read_text_file` 或唯一替换工具完成受限任务。
+- Good：调用方传入专用目录；模型先用 `find_files` 或 `search_text` 缩小范围，再用 `read_text_file` 或唯一替换工具完成受限任务。
 - Base：只注册业务 Low 工具，不传工作区选项；模型不会看到任何文件工具。
-- Bad：把仓库根目录、用户主目录或 `.env` 目录当作默认工作区，或仅通过删除原始字符串中的 `../` 判断安全性。
+- Bad：把仓库根目录、用户主目录或 `.env` 目录当作默认工作区，或把递归遍历结果未经 `canonical` 和敏感路径校验直接回填。
 
 ### 6. 必要测试
 
-- `tests/agent/workspace_file_tools_test.cpp` 必须覆盖五项工具的正常闭环、重复创建、缺失目标、替换零/多匹配、容量、NUL、无效 UTF-8、绝对路径、`..`、敏感路径与目录容量。
-- 必须创建真实工作区外目录，并通过目录符号链接或 Windows 目录联接点验证读取拒绝逃逸，且断言 `list_directory` 不暴露该链接条目。
+- `tests/agent/workspace_file_tools_test.cpp` 必须覆盖写入工具的正常闭环、重复创建、缺失目标、替换零/多匹配、容量、NUL、无效 UTF-8、绝对路径、`..`、敏感路径与目录容量。
+- 必须覆盖 `find_files` 的递归普通文件发现、稳定排序、结果截断及敏感路径隐藏；覆盖 `search_text` 的行列号、UTF-8 文本预览、超限/非 UTF-8 跳过、空查询与结果截断。
+- 必须创建真实工作区外目录，并通过目录符号链接或 Windows 目录联接点验证读取和两项搜索均拒绝逃逸，且断言 `list_directory` 不暴露该链接条目。
 - 所有文件测试只使用系统临时目录；测试结束后清理根目录与外部链接目标。
 
 ### 7. 错误写法 vs 正确写法
@@ -122,9 +130,10 @@ const AgentResult result = agent.run("整理工作区说明", trace);
 #### 错误写法
 
 ```cpp
-// 错误：只检查字符串中没有 ../，链接仍可把访问带到工作区外。
-const std::filesystem::path path = root / raw_path;
-return readFile(path);
+// 错误：递归返回原始条目，链接和敏感目录仍可能进入模型上下文。
+for(const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+    files.push_back(entry.path().string());
+}
 ```
 
 #### 正确写法
@@ -133,4 +142,5 @@ return readFile(path);
 SimpleAgentOptions options;
 options.workspace_file_tools = WorkspaceFileToolOptions{"D:/agent-workspace"};
 SimpleAgent agent(client, std::move(options));
+// handler 内部先 canonical 条目、验证根目录与敏感路径，再返回相对路径和受限结果。
 ```
